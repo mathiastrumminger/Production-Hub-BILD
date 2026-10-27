@@ -1,5 +1,12 @@
 # Changelog
 
+## Bildnext-Hosting – 2026-10-27
+
+- ARM64-Container, statischer Nginx-Server und Helm-Chart ergänzt
+- private Container- und Chart-Veröffentlichung mit Container-Smoke-Test ergänzt
+- PRD-Hosting mit Firmennetz-Zugriff und Release-/Rollback-Dokumentation vorbereitet
+- Anwendungslogik, Datenmigrationen und Storage-Keys unverändert
+
 ## 0.24.0 – 2026-10-27
 
 ### Repository-Baseline

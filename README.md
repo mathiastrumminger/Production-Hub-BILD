@@ -54,6 +54,13 @@ Der Build erzeugt:
 └── .github/workflows/ci.yml           # automatisierte Prüfung und Build-Artefakt
 ```
 
+## Hosting auf Bildnext PRD
+
+Dockerfile, ARM64-Builds und Helm-Chart sind für den privaten Bildnext-Deploymentweg
+vorbereitet. Zieladresse: `https://production-hub.prd.bildnext.as-infra.de` (Firmennetz/VPN).
+Build, Releases und Rollback sind in [Deployment](docs/DEPLOYMENT.md) beschrieben.
+Die Anwendung speichert Daten auch dort ausschließlich im jeweiligen Browser.
+
 ## Daten sichern
 
 Die Anwendung bietet unter Administration einen JSON-Export und -Import. Vor Änderungen an Migrationen oder Storage-Keys immer ein Backup aus der bisherigen Version exportieren.

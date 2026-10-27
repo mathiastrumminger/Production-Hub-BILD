@@ -1,0 +1,33 @@
+name: Build Helm charts
+
+on:
+  workflow_run:
+    workflows: [Docker Build and Push]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  helm:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: azure/setup-helm@v4
+      - name: Publish private Helm chart
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_OWNER: ${{ github.repository_owner }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          helm lint helm
+          printf '%s' "$GH_TOKEN" | helm registry login ghcr.io -u "$REGISTRY_USER" --password-stdin
+          helm package helm --destination /tmp/production-hub-chart
+          helm push /tmp/production-hub-chart/*.tgz "oci://ghcr.io/${REGISTRY_OWNER,,}"
