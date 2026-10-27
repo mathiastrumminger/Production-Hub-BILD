@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Production Hub</title>
+<link rel="stylesheet" href="./src/styles.css">
+</head>
+<body>
+<div id="login" class="login hidden"></div>
+<div id="app" class="app hidden">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">PH</span><div><b>Production Hub</b><small>Production Management</small></div></div>
+    <nav id="nav"></nav>
+    <div class="sidebar-foot" id="sidefoot"></div>
+  </aside>
+  <section class="content">
+    <header class="topbar">
+      <h1 id="title"></h1>
+      <div class="top-right">
+        <button class="icon-btn" id="themeBtn" data-act="theme" title="Helles Design">☀️</button>
+        <button class="icon-btn" data-act="bell" title="Benachrichtigungen"><span>🔔</span><i id="bellCount" class="dot hidden"></i></button>
+        <div class="user-chip" data-act="switchUser" title="Benutzer wechseln"><span id="userName"></span><em id="userRole"></em></div>
+      </div>
+    </header>
+    <main id="main"></main>
+  </section>
+</div>
+<div id="bellPanel" class="bell-panel hidden"></div>
+<div id="modalLayer" class="modal-layer hidden"></div>
+<div id="confirmLayer" class="modal-layer hidden"></div>
+<div id="toasts" class="toasts"></div>
+<script src="./vendor/jszip.min.js"></script>
+<script src="./src/app.js"></script>
+</body>
+</html>
