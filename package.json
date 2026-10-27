@@ -1,6 +1,6 @@
 {
   "name": "production-hub",
-  "version": "0.24.0",
+  "version": "0.24.1",
   "private": true,
   "description": "Statischer Production-Hub-Prototyp für Produktions-, Studio-, Streaming- und Ressourcenplanung.",
   "scripts": {

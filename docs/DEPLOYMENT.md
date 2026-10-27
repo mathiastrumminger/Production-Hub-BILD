@@ -7,38 +7,44 @@ dafür den vorhandenen JSON-Export und -Import verwenden.
 
 ## Komponenten
 
-- Quellrepository: `mathiastrumminger/Production-Hub-BILD`
-- Privater Deployment-Spiegel: `spring-media/next-production-hub`
-- ARM64-Image: `ghcr.io/spring-media/next-production-hub:<VERSION>`
-- OCI-Chart: `oci://ghcr.io/spring-media/next-production-hub-chart`
+- Einziges Quell- und Build-Repository: `mathiastrumminger/Production-Hub-BILD`
+- Privates ARM64-Image: `ghcr.io/mathiastrumminger/production-hub-bild:<VERSION>`
+- Privates OCI-Chart: `oci://ghcr.io/mathiastrumminger/next-production-hub-chart`
 - Flux: `spring-media/bildnext-flux-cd`, Verzeichnis `prd/production-hub`
 - Ziel: `https://production-hub.prd.bildnext.as-infra.de`
 - Zugriff: Firmennetz/VPN, Skipper-Prädikat `SourceFromLast("145.243.0.0/16")`
 
-Der private Spiegel nutzt den vorhandenen Registry-Zugang des Bildnext-Clusters.
-Es werden keine persönlichen GitHub-Tokens in Workflows oder Kubernetes-Secrets kopiert.
-Die Workflows veröffentlichen ihre Pakete mit dem eigenen `GITHUB_TOKEN` im jeweiligen Repository-Owner.
-Nur Pakete aus dem Spring-Media-Spiegel werden nach PRD ausgerollt.
+Es wird kein Deployment-Spiegel verwendet. Image und Chart entstehen direkt im Original
+mit dem eigenen `GITHUB_TOKEN`. Der Cluster nutzt seinen bestehenden Registry-Zugang
+für `maps-technical`; persönliche Tokens werden nicht in den Cluster kopiert.
+
+## Einmalige Voraussetzung: PRD-Lesezugriff
+
+`maps-technical` muss die privaten Pakete des Original-Repositories lesen dürfen.
+Beide Pakete sind dem Original-Repository zugeordnet. Der Repository-Administrator
+kann dem Servicekonto Lesezugriff auf das Repository geben:
+
+```bash
+gh api --method PUT \
+  repos/mathiastrumminger/Production-Hub-BILD/collaborators/maps-technical \
+  -f permission=pull
+```
+
+Eine eventuell erzeugte Einladung muss mit dem Servicekonto angenommen werden.
+Die Pakete müssen die Repository-Berechtigungen erben oder dem Servicekonto explizit
+Lesezugriff gewähren. Vor Aktivierung des Flux-Releases den Abruf von Image und Chart
+mit dem vorhandenen PRD-Zugang prüfen. Ohne diese Freigabe bleibt der Release ein Entwurf.
 
 ## Releases
 
-1. Änderungen im Quellrepository per Pull Request integrieren.
+1. Änderungen im Original-Repository per Pull Request integrieren.
 2. Für ein neues Release `package.json`, `package-lock.json`, `VERSION`, `helm/Chart.yaml`
    (`version`, `appVersion`) und `helm/values.yaml` (`tag`) gemeinsam anheben.
-3. Den geprüften `main`-Stand ohne Force-Push in den privaten Deployment-Spiegel übernehmen:
-
-   ```bash
-   git remote add bildnext https://github.com/spring-media/next-production-hub.git
-   git switch main
-   git pull --ff-only origin main
-   git push bildnext main
-   ```
-
-4. `Docker Build and Push` prüft Anwendung und Chart, baut ARM64 und testet den echten
+3. `Docker Build and Push` prüft Anwendung und Chart, baut ARM64 und testet den echten
    Container mit schreibgeschütztem Dateisystem. Danach werden das private Semver-Image
    und ein SHA-Tag veröffentlicht. `Build Helm charts` veröffentlicht anschließend
    das Chart vom exakt gleichen Commit.
-5. Die Flux-Image-Automation folgt Patch-Releases ab `0.24.0` unterhalb `0.25.0`.
+4. Die Flux-Image-Automation folgt Patch-Releases ab `0.24.0` unterhalb `0.25.0`.
    Bei Chart-Änderungen zusätzlich `spec.chart.spec.version` im Flux-HelmRelease
    über einen Pull Request anheben.
 

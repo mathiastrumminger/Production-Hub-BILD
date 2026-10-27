@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.24.1 – 2026-10-27
+
+- Original-Repository als einzige Quelle für Builds und private Registry-Pakete festgelegt
+- Chart-Standardwerte auf das Image im Original-Owner umgestellt
+- PRD-Lesezugriff für das bestehende Servicekonto als Deployment-Voraussetzung dokumentiert
+- Anwendungslogik und Schema-Version 21 unverändert
+
 ## Bildnext-Hosting – 2026-10-27
 
 - ARM64-Container, statischer Nginx-Server und Helm-Chart ergänzt

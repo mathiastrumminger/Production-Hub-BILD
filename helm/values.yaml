@@ -1,6 +1,6 @@
 replicaCount: 2
-image: ghcr.io/spring-media/next-production-hub
-tag: 0.24.0
+image: ghcr.io/mathiastrumminger/production-hub-bild
+tag: 0.24.1
 imagePullPolicy: IfNotPresent
 imagePullSecrets:
   - name: production-hub-imagepull-secret
