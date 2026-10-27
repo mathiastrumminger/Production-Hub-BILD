@@ -1,0 +1,27 @@
+replicaCount: 2
+image: ghcr.io/spring-media/next-production-hub
+tag: 0.24.0
+imagePullPolicy: IfNotPresent
+imagePullSecrets:
+  - name: production-hub-imagepull-secret
+imagePullSecret:
+  enabled: true
+  name: production-hub-imagepull-secret
+  remoteKey: /next/nmt/github/imagepullsecret
+service:
+  port: 8080
+ingress:
+  enabled: true
+  className: skipper
+  annotations:
+    zalando.org/skipper-predicate: 'SourceFromLast("145.243.0.0/16")'
+  host: production-hub.prd.bildnext.as-infra.de
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    cpu: 250m
+    memory: 64Mi
+flux:
+  enabled: false
