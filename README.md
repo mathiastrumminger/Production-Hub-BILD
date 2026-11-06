@@ -1,6 +1,6 @@
 # Production Hub
 
-Production Hub ist ein browserbasierter Prototyp für Produktions-, Studio-, Streaming-, Masken-, Personal-, Equipment- und Schnittplanung. Die Repository-Basis ist **ProductionHub v0.24**.
+Production Hub ist ein browserbasierter Prototyp für Produktions-, Studio-, Streaming-, Masken-, Personal-, Equipment- und Schnittplanung. Die Repository-Basis ist **ProductionHub v0.30**.
 
 ## Aktueller technischer Stand
 
@@ -9,7 +9,7 @@ Production Hub ist ein browserbasierter Prototyp für Produktions-, Studio-, Str
 - JSZip 3.10.2 liegt versioniert unter `vendor/` und funktioniert offline
 - Anwendungsdaten im Browser unter `localStorage['productionHub.v1']`
 - persönliche UI-Einstellungen unter `localStorage['productionHub.ui']`
-- Datenmigrationen laufen beim Start sequenziell über `db.version`; v0.24 erwartet Schema-Version **21**
+- Datenmigrationen laufen beim Start sequenziell über `db.version`; v0.30 erwartet Schema-Version **21**
 - die ursprüngliche eigenständige HTML-Datei bleibt unter `standalone/` erhalten
 
 > **Wichtig:** Das ist weiterhin ein lokaler Prototyp, kein Mehrbenutzersystem. Daten werden weder synchronisiert noch serverseitig gesichert. Das Repository sollte wegen operativer Demo- und Infrastrukturangaben standardmäßig **privat** bleiben.
@@ -34,7 +34,7 @@ npm run build
 Der Build erzeugt:
 
 - `dist/site/` – statische, getrennte Dateien für Hosting
-- `dist/ProductionHub_v0.24.html` – eigenständige HTML-Datei mit eingebettetem CSS, JavaScript und JSZip
+- `dist/ProductionHub_v0.30.html` – eigenständige HTML-Datei mit eingebettetem CSS, JavaScript und JSZip
 
 ## Repository-Struktur
 
@@ -45,7 +45,9 @@ Der Build erzeugt:
 │   ├── app.js                         # bestehende v0.24-Anwendungslogik
 │   └── styles.css                     # bestehendes v0.24-Design
 ├── vendor/jszip.min.js                # vendorte JSZip-Version 3.10.2
-├── standalone/ProductionHub_v0.24.html# unveränderte Ausgangsversion
+├── standalone/
+│   ├── ProductionHub_v0.24.html       # ursprüngliche Baseline
+│   └── ProductionHub_v0.30.html       # aktuelle eigenständige Version
 ├── scripts/
 │   ├── build.mjs                      # Site- und Standalone-Build
 │   └── dev-server.mjs                 # lokaler Server ohne Abhängigkeiten

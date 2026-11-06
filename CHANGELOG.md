@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.30 – 2026-11-06
+
+### v0.29 – Masken-Anfrage: freie Zeitfenster
+- Masken-Anfragen zeigen jetzt freie Zeitfenster statt fixem Drehbeginn
+- Automatische Prüfung der Masken-Kapazität mit Auslastungsanzeige
+- Intelligente Berechnung von Alternativzeiten für Studio-Buchungen
+- Verbesserte Masken-Planung mit visueller Belegungsdarstellung
+
+### v0.28 – Globale Suche und Erfolgsmeldungen
+- Neue globale Suchfunktion auf der Übersicht für alle Kollektionen
+- Prominente Erfolgsmeldungen oben rechts im Interface
+- Verbesserte Toast-Benachrichtigungen mit animierten Erfolgshinweisen
+- Durchsuchbare Inhalte: Studio-Termine, Streams, Maske, Schnitte, Anfragen, Personal, Equipment
+
+### v0.27 – Streaming-Tabelle
+- Excel-ähnliche Streaming-Tabelle mit Inline-Editing
+- Tastenkürzel für schnelle Dateneingabe (Tab, Enter, Strg+D für Duplizieren)
+- Multi-Zeilen-Bearbeitung und Bulk-Operationen
+- Event-Vorlagen für wiederkehrende Streams
+- Batch-Anlage von Events aus Vorlagen mit automatischer Terminverteilung
+- Copy-Paste-Support aus Excel/Spreadsheets
+
+### v0.26 – Accessibility (WCAG 2.1)
+- Focus-Indikatoren für Tastaturnavigation (WCAG 2.4.7)
+- Verbesserte ARIA-Labels und Rollen (WCAG 4.1.2, 1.3.1)
+- Skip-Links für schnelle Navigation (WCAG 2.4.1)
+- Fehlerkennung und Hinweise in Formularen (WCAG 3.3.2)
+- Responsive Design für mobile Geräte
+- Unterstützung für prefers-reduced-motion
+
+### v0.25 – Accessibility-Grundlage
+- 8-Pixel-Grid für konsistente Abstände
+- rem-basierte Schriftgrößen für bessere Skalierung
+- Mindest-Zielgrößen von 24×24px für Touch-Targets (WCAG 2.5.8)
+- Verbesserte Mindesthöhen für Eingabefelder (40px) und Buttons (32px)
+- Erhöhte Zeilenhöhe für bessere Lesbarkeit (line-height: 1.5)
+
+### Technische Verbesserungen
+- Erweiterte CSS-Struktur mit neuen Utility-Klassen
+- Optimierte Formular-Validierung
+- Verbesserte Performance bei großen Datensätzen
+- Neue Hilfsfunktionen für Masken- und Studio-Planung
+
 ## 0.24.1 – 2026-10-27
 
 - Original-Repository als einzige Quelle für Builds und private Registry-Pakete festgelegt

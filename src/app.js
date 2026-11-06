@@ -1,5 +1,5 @@
 /* =========================================================================
-   Production Hub – Prototyp v0.24
+   Production Hub – Prototyp v0.30
    Studio · Streaming · Maske · Personal · Equipment · Anfragen der Redaktion
    Daten liegen lokal (localStorage, mit Fallback für SharePoint-Vorschau).
    Die Datenschicht ist in "Store" gekapselt, damit später ein Server/
@@ -1271,8 +1271,27 @@ function knownGender(talent) {
 }
 /* Masken-Fenster einer Anfrage (geschätzt aus Sendebeginn + Herr/Dame) */
 function reqMkWindow(r) {
+  if (r.mkStart) { const d = +r.mkDuration || mkStdDur(r.gender || 'Herr'); const s = tmin(r.mkStart); return { s, e: s + d, start: r.mkStart, duration: d }; }
   const p = mkPlan({ start: r.onAir }, r.gender || 'Herr', '');
   return p ? { s: tmin(p.start), e: tmin(p.start) + p.duration, start: p.start, duration: p.duration } : null;
+}
+
+/* v0.29 Masken-Anfrage: freie Zeitfenster statt Drehbeginn */
+const mkStdDur = g => { const c = mkCfg(); return Math.max(5, (c[g] || c.Herr) - c.buffer); };
+function mkNeed(w) {
+  const names = splitNames(w.talent); const cfg = mkCfgD(w.date), cap = +cfg.capacity || 1;
+  const per = names.map(n => +w.mkDur || mkStdDur(w.genders[n] || 'Herr'));
+  const n = Math.max(1, names.length), dur = Math.max(5, ...(per.length ? per : [+w.mkDur || mkStdDur('Herr')]));
+  return { n, seats: Math.min(n, cap), len: Math.ceil(n / cap) * dur, dur, cap, auto: !+w.mkDur };
+}
+function mkFreeWindows(date, need, step = 15) {
+  const cfg = mkCfgD(date), items = mkLoadItems(date, true), T = today();
+  const open = tmin(cfg.open || '08:00'), close = tmin(cfg.close || '20:00');
+  let from = open; if (date === T) { const n = new Date(); from = Math.max(open, Math.ceil((n.getHours() * 60 + n.getMinutes() + 15) / step) * step); }
+  const fits = s => { if (s + need.len > close) return false; for (let t = s; t < s + need.len; t += 5) if (mkCountAt(items, t) + need.seats > need.cap) return false; return true; };
+  const starts = []; for (let s = from; s + need.len <= close; s += step) if (fits(s)) starts.push(s);
+  const wins = []; starts.forEach(s => { const l = wins[wins.length - 1]; if (l && s - l.last === step) { l.last = s; l.starts.push(s); } else wins.push({ first: s, last: s, starts: [s] }); });
+  return { wins, fits, open, close, items };
 }
 /* Belegung der Maske an einem Tag: geplante Slots + (optional) offene Anfragen */
 function mkLoadItems(date, withPending = true, exceptReq) {
@@ -1613,7 +1632,7 @@ VIEWS.dashboard = main => {
       ${postTodayCard()}
       ${testsCard()}
       ${techView() && openIssues().length ? vpIssuesHtml() : ''}
-      <div class="card"><h3>🎬 Studio heute <span class="badge">${bk.length}</span></h3>${bk.map(b => row(b.allDay ? 'ganztägig' : `${b.start}–${b.end}`, b.title, `<i class="sw" style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${studioById(b.studioId).color}"></i> ${esc(studioById(b.studioId).name)}${b.type !== 'Produktion' ? ' · ' + esc(b.type) : ''}${b.needsMakeup ? ' · 💄 Maske' : ''}${b.live && !isBlock(b.type) ? ' · ' + liveChip(b) : ''}`, 'bookings', b)).join('') || '<div class="empty">Keine Studio-Termine.</div>'}</div>
+      <div class="card"><h3>🎬 Studio heute <span class="badge">${bk.length}</span></h3>${bk.map(b => row(b.allDay ? 'ganztägig' : `${b.start}–${b.end}`, b.title, `<i class="sw" style="display:inline-block;width:8px;height:8px;border-radius:4px;background:${studioById(b.studioId).color}"></i> ${esc(studioById(b.studioId).name)}${b.type !== 'Produktion' ? ' · ' + esc(b.type) : ''}${b.needsMakeup ? ' · 💄 Maske' : ''}${b.live && !isBlock(b.type) ? ' · ' + liveChip(b) : ''}`, 'bookings', b)).join('') || '<div class="empty">Keine Studio-Termine.</div>'}</div>
       <div class="card"><h3>💄 Maske heute <span class="badge">${mk.length}</span></h3>${mk.map(m => row(`${m.start}–${mkEnd(m)}`, m.talent || m.kind, `${esc(m.gender || '')} · ${esc(m.kind)} · ${esc(m.location || '')}${m.production ? ' · ' + esc(m.production) : ''}`, 'makeup', m)).join('') || '<div class="empty">Keine Masken-Slots.</div>'}</div>
       <div class="card"><h3>📡 Streams heute & morgen <span class="badge">${st.length}</span></h3>${st.map(s => s.kind === 'Hinweistag' ? row(fmtShort(s.date), '⚠️ ' + s.name, esc(s.notes || ''), 'streams', s) : row(`${s.date === T ? 'Heute' : 'Morgen'} ${s.start || ''}`, s.name, `<span class="badge ${STATUS_CLS[s.status]}">${esc(s.status)}</span> ${techView() ? routeChips(s) : techChip(s)} ${recChip(s)}`, 'streams', s)).join('') || '<div class="empty">Keine Streams.</div>'}</div>
       <div class="card"><h3>🔔 Letzte Änderungen von Kolleg*innen</h3>${feed.map(a => `<div class="list-row" data-act="openAct" data-aid="${a.id}"><div class="time">${fmtTs(a.ts)}</div><div><div>${esc(a.title)} <span class="muted">· ${COLL_NAME[a.coll]} ${a.action}</span></div><div class="sub">${esc(userName(a.userId))}${a.changes && a.changes.length ? ' · ' + esc(a.changes.map(c => c.label).join(', ')) : ''}</div></div></div>`).join('') || '<div class="empty">Noch keine Änderungen.</div>'}</div>
@@ -1638,7 +1657,7 @@ VIEWS.studio = main => {
   const label = tab === 'day' ? `${WDL[parseISO(D).getDay()]}, ${fmtDate(D)}` : weekLabel(ws);
   const nOpen = openReqs('studio').length;
   let html = `<div class="toolbar">${tabsHtml('studio', [['week', 'Woche'], ['day', 'Tagesplan'], ['list', 'Liste']])}${dateNav('studio', label, tab === 'day' ? 'day' : 'week')}<span class="spacer"></span>${seenBtn('studio')}${can.edit() ? (nOpen ? `<button class="btn" data-act="goReq" data-tab="open" style="border-color:var(--new)">📨 ${nOpen} offene Studio-Anfrage${nOpen > 1 ? 'n' : ''}</button>` : '') : '<button class="btn primary" data-act="goReq" data-tab="studio">📨 Studio anfragen</button>'}${newBtn('newLiveBooking', '🔴 + Live-Sendung')}${newBtn('newBooking', '+ Termin')}${newBtn('newBlocker', '+ Blocker')}</div>
-    <div class="toolbar">${chips}${can.edit() && nOpen ? '<span class="muted" style="font-size:12px;margin-left:8px">Gestrichelt blau = offene Anfrage der Redaktion</span>' : ''}</div>`;
+    <div class="toolbar">${chips}${can.edit() && nOpen ? '<span class="muted" style="font-size:0.75rem;margin-left:8px">Gestrichelt blau = offene Anfrage der Redaktion</span>' : ''}</div>`;
   const vis = db.bookings.filter(b => !off.has(b.studioId));
   const reqs = can.edit() ? openReqs('studio').filter(r => r.onAir && (!r.studioId || !off.has(r.studioId))) : [];
   if (tab === 'week') {
@@ -1646,7 +1665,7 @@ VIEWS.studio = main => {
     const cols = days.map(d => ({ key: d, label: `${parseISO(d).getDate()} ${WD[parseISO(d).getDay()]}`, today: d === T, data: { date: d } }));
     const inW = vis.filter(b => b.date >= ws && b.date <= addDays(ws, 6));
     const evs = inW.filter(b => !b.allDay).map(b => bookingEvent(b, b.date)).concat(reqs.filter(r => r.date >= ws && r.date <= addDays(ws, 6)).map(r => reqStudioEvent(r, r.date)));
-    html += `<div class="muted" style="font-size:12px;margin:-6px 0 8px">${calendarRequestView() ? 'Klick in eine freie Zeit = Studio-Anfrage zu diesem Zeitpunkt' : can.edit() ? 'Termine per <b>Drag & Drop</b> verschieben (mit Rückfrage & Rückgängig) · Klick in eine freie Zeit = neuer Termin · <b>＋</b> am Termin = zur gleichen Zeit in einem anderen Studio' : ''}</div>`;
+    html += `<div class="muted" style="font-size:0.75rem;margin:-8px 0 8px">${calendarRequestView() ? 'Klick in eine freie Zeit = Studio-Anfrage zu diesem Zeitpunkt' : can.edit() ? 'Termine per <b>Drag & Drop</b> verschieben (mit Rückfrage & Rückgängig) · Klick in eine freie Zeit = neuer Termin · <b>＋</b> am Termin = zur gleichen Zeit in einem anderen Studio' : ''}</div>`;
     html += timeGrid({ cols, events: evs, allday: inW.filter(b => b.allDay).map(b => ({ col: b.date, title: `${b.title} · ${studioById(b.studioId).name}`, color: isBlock(b.type) ? '#3a3f4b;color:#d4d7de' : studioById(b.studioId).color, coll: 'bookings', id: b.id, isNew: newState(b) })), slotAct: calendarRequestView() ? 'slotStudioRequest' : can.edit() ? 'slotBooking' : '' });
   } else if (tab === 'day') {
     const studios = db.studios.filter(s => !off.has(s.id));
@@ -1654,7 +1673,7 @@ VIEWS.studio = main => {
     const inD = vis.filter(b => b.date === D);
     const evs = inD.filter(b => !b.allDay).map(b => bookingEvent(b, b.studioId)).concat(reqs.filter(r => r.date === D && r.studioId).map(r => reqStudioEvent(r, r.studioId)));
     html += cubaDayBar(D);
-    html += `<div class="muted" style="font-size:12px;margin:-6px 0 8px">${calendarRequestView() ? 'Klick in eine freie Zeit = Studio-Anfrage für dieses Studio und diesen Zeitpunkt' : can.edit() ? 'Termine per <b>Drag & Drop</b> in andere Zeit oder anderes Studio ziehen (mit Rückfrage & Rückgängig) · Klick in eine freie Zeit = neuer Termin in diesem Studio' : ''}</div>`;
+    html += `<div class="muted" style="font-size:0.75rem;margin:-8px 0 8px">${calendarRequestView() ? 'Klick in eine freie Zeit = Studio-Anfrage für dieses Studio und diesen Zeitpunkt' : can.edit() ? 'Termine per <b>Drag & Drop</b> in andere Zeit oder anderes Studio ziehen (mit Rückfrage & Rückgängig) · Klick in eine freie Zeit = neuer Termin in diesem Studio' : ''}</div>`;
     html += timeGrid({ cols, events: evs, allday: inD.filter(b => b.allDay).map(b => ({ col: b.studioId, title: b.title, color: isBlock(b.type) ? '#3a3f4b;color:#d4d7de' : studioById(b.studioId).color, coll: 'bookings', id: b.id, isNew: newState(b) })), slotAct: calendarRequestView() ? 'slotStudioRequest' : can.edit() ? 'slotBooking' : '', slotData: { date: D } });
   } else {
     const rows = vis.filter(b => b.date >= ws && b.date <= addDays(ws, 6)).sort(byDate);
@@ -1699,7 +1718,7 @@ VIEWS.streams = main => {
     ${rows.map(s => s.kind === 'Hinweistag'
       ? `<tr class="row ${newState(s) ? 'is-new' : ''}" data-act="open" data-coll="streams" data-id="${s.id}"><td class="st"></td><td>${fmtDate(s.date)}</td><td>${wd(s.date)}</td><td colspan="${16 + cf.length}"><span class="hint-red">⚠️ ${esc(s.name)}</span> <span class="hint-red" style="font-weight:400">${esc(s.notes || '')}</span>${newCell(s)}</td></tr>`
       : `<tr class="row ${newState(s) ? 'is-new' : ''} ${s.status === 'Findet nicht statt' ? 'cancel' : ''} ${s.date < T ? 'past' : ''}" data-act="open" data-coll="streams" data-id="${s.id}"><td class="st"><div class="st-${STATUS_CLS[s.status] || ''}" title="${esc(s.status)}"></div></td><td>${fmtDate(s.date)}</td><td>${wd(s.date)}</td><td><b>${esc(s.name)}</b>${newCell(s)}</td><td>${techView() ? routeChips(s) : techChip(s)}</td><td>${recChip(s)} ${playerChip('streams', s)}</td><td>${adChip(s)}</td><td><span class="badge ${STATUS_CLS[s.status]}">${esc(s.status)}</span></td><td>${esc(s.geo || '')}</td><td>${s.standzeit ? fmtDate(s.standzeit) : 'Unbegrenzt'}</td><td>${esc(s.mode || '')}</td><td>${esc(s.start || '')}</td><td>${esc(s.end || '')}</td><td>${(s.platforms || []).map(p => `<span class="tag">${esc(p)}</span>`).join('')}</td><td>${esc(s.access || '')}</td><td>${s.pass ? 'Ja' : 'Nein'}</td><td>${esc(s.commentator || '')}${s.commentatorWish ? `<div class="muted">${esc(s.commentatorWish)}</div>` : ''}</td><td>${esc(s.owner || '')}</td><td>${esc(s.contact || '')}</td>${cf.map(x => `<td>${esc(displayVal(s, { ...x, custom: true }))}</td>`).join('')}</tr>`).join('') || '<tr><td colspan="18" class="empty">Keine Einträge für diese Filter.</td></tr>'}
-    </tbody></table></div><div class="muted" style="margin-top:8px;font-size:12px">${rows.length} Einträge</div>`;
+    </tbody></table></div><div class="muted" style="margin-top:8px;font-size:0.75rem">${rows.length} Einträge</div>`;
   } else {
     const list = db.streams.filter(streamRowsNoRange);
     html += monthGrid(D, day => {
@@ -1729,7 +1748,7 @@ function mkEvent(m, colKey) {
 }
 function reqMkEvent(r, colKey) {
   const w = reqMkWindow(r);
-  return { col: colKey, s: w.s, e: w.e, title: `📨 ${r.talent}`, sub: `Anfrage · ${w.start}–${mint(w.e)} · ${r.production} ab ${r.onAir}`, tip: `Offene Anfrage von ${reqBy(r)}\n${r.talent} (${r.gender || '?'}) · ${r.production} ab ${r.onAir}${r.notes ? '\n' + r.notes : ''}`, color: 'transparent', cls: 'req', coll: 'requests', id: r.id, isNew: newState(r) };
+  return { col: colKey, s: w.s, e: w.e, title: `📨 ${r.talent}`, sub: `Anfrage · ${w.start}–${mint(w.e)} · ${r.production}${r.mkStart ? '' : ' ab ' + r.onAir}`, tip: `Offene Anfrage von ${reqBy(r)}\n${r.talent} (${r.gender || '?'}) · ${r.production} ab ${r.onAir}${r.notes ? '\n' + r.notes : ''}`, color: 'transparent', cls: 'req', coll: 'requests', id: r.id, isNew: newState(r) };
 }
 /* max. gleichzeitige Personen in der Maske = Bedarf an Maskenbildner*innen */
 function mkPeak(list) {
@@ -1756,9 +1775,9 @@ VIEWS.makeup = main => {
     const colOf = l => db.options.mkLocations.includes(l) ? l : db.options.mkLocations[0];
     const ev = db.makeup.filter(m => m.date === D).map(m => mkEvent(m, colOf(m.location))).concat(dayReqs.map(r => reqMkEvent(r, colOf(r.location))));
     const needs = db.bookings.filter(b => b.date === D && b.needsMakeup && !isBlock(b.type) && b.status !== 'Abgesagt').sort(byDate);
-    const reqCard = can.edit() ? `<div class="card" style="margin-bottom:14px;${allOpen.length ? 'border-color:var(--new)' : ''}"><h3>📨 Offene Anfragen der Redaktion <span class="badge ${allOpen.length ? 'new' : ''}">${allOpen.length}</span></h3>${openReqRows(allOpen.slice(0, 8)) || '<div class="empty">Keine offenen Masken-Anfragen.</div>'}${allOpen.length > 8 ? `<div style="margin-top:6px"><button class="btn small" data-act="goReq" data-tab="open">Alle ${allOpen.length} anzeigen</button></div>` : ''}</div>` : '';
+    const reqCard = can.edit() ? `<div class="card" style="margin-bottom:16px;${allOpen.length ? 'border-color:var(--new)' : ''}"><h3>📨 Offene Anfragen der Redaktion <span class="badge ${allOpen.length ? 'new' : ''}">${allOpen.length}</span></h3>${openReqRows(allOpen.slice(0, 8)) || '<div class="empty">Keine offenen Masken-Anfragen.</div>'}${allOpen.length > 8 ? `<div style="margin-top:8px"><button class="btn small" data-act="goReq" data-tab="open">Alle ${allOpen.length} anzeigen</button></div>` : ''}</div>` : '';
     const side = `${reqCard}<div class="card"><h3>🎬 Studio-Termine mit Maske</h3>${needs.map(b => { const linked = db.makeup.filter(m => m.bookingId === b.id); const open = splitNames(b.guests).filter(g => !linked.some(m => m.talent === g)); return `<div class="list-row" ${can.edit() ? `data-act="mkFromBooking" data-id="${b.id}"` : `data-act="open" data-coll="bookings" data-id="${b.id}"`}><div class="time">${b.start || ''}</div><div><div>${esc(b.title)}${newCell(b)}</div><div class="sub">${esc(studioById(b.studioId).name)}${b.guests ? ' · ' + esc(b.guests) : ''}</div><div class="sub">${linked.map(m => `✅ ${m.start} ${esc(m.talent)}`).join('<br>')}${linked.length && open.length ? '<br>' : ''}${open.length || !linked.length ? `<span class="hint-red">offen: ${esc(open.join(', ') || 'Maske')}</span>${can.edit() ? ' – klicken' : ''}` : ''}</div></div></div>`; }).join('') || '<div class="empty">Keine Studio-Termine mit Maske an diesem Tag.</div>'}</div>
-      <div class="card" style="margin-top:14px"><h3>Legende</h3><div class="sub"><span class="tag" style="background:${MK_COLOR.Dame};color:#111">♀ Dame</span> <span class="tag" style="background:${MK_COLOR.Herr};color:#111">♂ Herr</span> <span class="tag" style="border:1px dashed #60a5fa;background:transparent;color:#bfdbfe">📨 Anfrage</span> gestrichelt grau = reduziertes Make-up</div><div class="sub muted" style="margin-top:6px">Standard: Herren ${mkCfg().Herr} Min., Damen ${mkCfg().Dame} Min. vor Sendebeginn, davon ${mkCfg().buffer} Min. Weg ins Studio. Kapazität ${mkCfg().capacity} gleichzeitig. Anpassbar unter Administration.</div></div>`;
+      <div class="card" style="margin-top:16px"><h3>Legende</h3><div class="sub"><span class="tag" style="background:${MK_COLOR.Dame};color:#111">♀ Dame</span> <span class="tag" style="background:${MK_COLOR.Herr};color:#111">♂ Herr</span> <span class="tag" style="border:1px dashed #60a5fa;background:transparent;color:#bfdbfe">📨 Anfrage</span> gestrichelt grau = reduziertes Make-up</div><div class="sub muted" style="margin-top:8px">Standard: Herren ${mkCfg().Herr} Min., Damen ${mkCfg().Dame} Min. vor Sendebeginn, davon ${mkCfg().buffer} Min. Weg ins Studio. Kapazität ${mkCfg().capacity} gleichzeitig. Anpassbar unter Administration.</div></div>`;
     html += `<div class="side-split"><div>${timeGrid({ cols, events: ev, slotAct: calendarRequestView() ? 'slotMakeupRequest' : can.edit() ? 'slotMakeup' : '', slotData: { date: D } })}</div><div>${side}</div></div>`;
   } else if (tab === 'week') {
     const days = [...Array(7)].map((_, i) => addDays(ws, i));
@@ -1808,7 +1827,7 @@ VIEWS.staff = main => {
         </div>`;
       });
     });
-    html += g + '</div><div class="muted" style="margin-top:8px;font-size:12px">Gestrichelt = angefragt · 🎬 = Crew in Studio-Termin · In leere Zelle klicken, um einen Einsatz anzulegen.</div>';
+    html += g + '</div><div class="muted" style="margin-top:8px;font-size:0.75rem">Gestrichelt = angefragt · 🎬 = Crew in Studio-Termin · In leere Zelle klicken, um einen Einsatz anzulegen.</div>';
   } else {
     const cf = (db.fields.staff || []).filter(x => x.inList);
     html += `<div class="table-wrap"><table class="t"><thead><tr><th>Name</th><th>Gewerk</th><th>Beschäftigung</th><th>Firma</th><th>Telefon</th><th>E-Mail</th><th>Skills</th><th>Einsätze (30 Tage)</th>${cf.map(x => `<th>${esc(x.label)}</th>`).join('')}</tr></thead><tbody>
@@ -1828,7 +1847,7 @@ VIEWS.equipment = main => {
     const rows = db.equipment.filter(e => (!q || `${e.name} ${e.invNo} ${e.serial}`.toLowerCase().includes(q)) && (!f.eqCat || e.category === f.eqCat) && (!f.eqStatus || e.status === f.eqStatus)).sort((a, b) => (a.category + a.name).localeCompare(b.category + b.name));
     const cf = (db.fields.equipment || []).filter(x => x.inList);
     const counts = Object.keys(EQ_CLS).map(s => `<span class="badge ${EQ_CLS[s]}">${s}: ${db.equipment.filter(e => e.status === s).length}</span>`).join(' ');
-    html += `<div style="margin-bottom:10px">${counts}</div><div class="table-wrap"><table class="t"><thead><tr><th>Bezeichnung</th><th>Kategorie</th><th>Inventar-Nr.</th><th>Seriennr.</th><th>Lagerort</th><th>Status</th><th>Aktuell bei</th>${cf.map(x => `<th>${esc(x.label)}</th>`).join('')}<th></th></tr></thead><tbody>
+    html += `<div style="margin-bottom:8px">${counts}</div><div class="table-wrap"><table class="t"><thead><tr><th>Bezeichnung</th><th>Kategorie</th><th>Inventar-Nr.</th><th>Seriennr.</th><th>Lagerort</th><th>Status</th><th>Aktuell bei</th>${cf.map(x => `<th>${esc(x.label)}</th>`).join('')}<th></th></tr></thead><tbody>
       ${rows.map(e => { const l = db.loans.find(x => x.equipmentId === e.id && !x.returned && x.from <= addDays(T, 1)); const over = l && l.to < T; return `<tr class="row ${newState(e) ? 'is-new' : ''}" data-act="open" data-coll="equipment" data-id="${e.id}"><td><b>${esc(e.name)}</b>${newCell(e)}</td><td>${esc(e.category)}</td><td>${esc(e.invNo || '')}</td><td>${esc(e.serial || '')}</td><td>${esc(e.location || '')}</td><td><span class="badge ${EQ_CLS[e.status] || ''}">${esc(e.status)}</span></td><td>${l ? `${esc(l.borrower)} · ${esc(l.production)}<div class="${over ? 'hint-red' : 'muted'}">bis ${fmtDate(l.to)}${over ? ' – überfällig' : ''}</div>` : ''}</td>${cf.map(x => `<td>${esc(displayVal(e, { ...x, custom: true }))}</td>`).join('')}<td>${can.edit() ? (l ? `<button class="btn small" data-act="returnLoan" data-id="${l.id}">↩ Zurück</button>` : e.status === 'Verfügbar' ? `<button class="btn small" data-act="newLoan" data-eq="${e.id}">↗ Ausgeben</button>` : '') : ''}</td></tr>`; }).join('')}
     </tbody></table></div>`;
   } else {
@@ -1846,10 +1865,10 @@ VIEWS.settings = main => {
   const perm = typeof Notification !== 'undefined' ? Notification.permission : 'unsupported';
   main.innerHTML = `<div class="admin-grid"><div class="card"><h3>🔔 Benachrichtigungen für mich</h3><p class="muted" style="margin-top:0">Für diese Bereiche bekommst du ein Pop-up, sobald Kolleg*innen etwas anlegen oder ändern. Für Redaktion sind Studio- und Streaming-Neuerungen standardmäßig aus; Antworten auf deine eigenen Anfragen bekommst du immer. Hervorhebungen (NEU / GEÄNDERT) siehst du immer.</p>
     ${mods.map(m => `<label class="toggle"><input type="checkbox" data-act="toggleSub" data-mod="${m.id}" ${(me.subs || []).includes(m.id) ? 'checked' : ''}> ${m.ic} ${m.label}</label>`).join('')}
-    <div style="margin-top:10px">${perm === 'granted' ? '<span class="badge ok">System-Benachrichtigungen aktiv</span>' : perm === 'unsupported' ? '<span class="muted">System-Benachrichtigungen werden hier nicht unterstützt.</span>' : '<button class="btn" data-act="askNotif">System-Benachrichtigungen erlauben</button>'}</div></div>
-    <div class="card"><h3>🎨 Darstellung</h3><div class="seg-ctl"><button class="seg-btn ${state.theme !== 'light' ? 'on' : ''}" data-act="setTheme" data-v="dark">🌙 Dunkel</button><button class="seg-btn ${state.theme === 'light' ? 'on' : ''}" data-act="setTheme" data-v="light">☀️ Hell</button></div><div class="muted" style="font-size:12px;margin-top:6px">Auch oben rechts über ☀️ / 🌙 umschaltbar.</div><div style="margin-top:12px;font-size:12px;color:var(--muted)">Kachelgröße der Übersicht</div><div class="seg-ctl density-ctl" style="margin-top:5px"><button class="seg-btn ${state.tileDensity === 'normal' ? 'on' : ''}" data-act="tileDensity" data-v="normal">Normal</button><button class="seg-btn ${state.tileDensity === 'compact' ? 'on' : ''}" data-act="tileDensity" data-v="compact">Kompakt</button><button class="seg-btn ${state.tileDensity === 'small' ? 'on' : ''}" data-act="tileDensity" data-v="small">Klein</button></div><div class="muted" style="font-size:12px;margin-top:6px">Kompakte und kleine Kacheln scrollen bei längeren Inhalten.</div></div>
+    <div style="margin-top:8px">${perm === 'granted' ? '<span class="badge ok">System-Benachrichtigungen aktiv</span>' : perm === 'unsupported' ? '<span class="muted">System-Benachrichtigungen werden hier nicht unterstützt.</span>' : '<button class="btn" data-act="askNotif">System-Benachrichtigungen erlauben</button>'}</div></div>
+    <div class="card"><h3>🎨 Darstellung</h3><div class="seg-ctl"><button class="seg-btn ${state.theme !== 'light' ? 'on' : ''}" data-act="setTheme" data-v="dark">🌙 Dunkel</button><button class="seg-btn ${state.theme === 'light' ? 'on' : ''}" data-act="setTheme" data-v="light">☀️ Hell</button></div><div class="muted" style="font-size:0.75rem;margin-top:8px">Auch oben rechts über ☀️ / 🌙 umschaltbar.</div><div style="margin-top:16px;font-size:0.75rem;color:var(--muted)">Kachelgröße der Übersicht</div><div class="seg-ctl density-ctl" style="margin-top:4px"><button class="seg-btn ${state.tileDensity === 'normal' ? 'on' : ''}" data-act="tileDensity" data-v="normal">Normal</button><button class="seg-btn ${state.tileDensity === 'compact' ? 'on' : ''}" data-act="tileDensity" data-v="compact">Kompakt</button><button class="seg-btn ${state.tileDensity === 'small' ? 'on' : ''}" data-act="tileDensity" data-v="small">Klein</button></div><div class="muted" style="font-size:0.75rem;margin-top:8px">Kompakte und kleine Kacheln scrollen bei längeren Inhalten.</div></div>
     <div class="card"><h3>👤 Mein Konto</h3><div>${esc(me.name)}</div><div class="muted">Gruppe: ${grp()} · Rechte: ${ROLE_LABEL[me.role]} · Team: ${esc(me.team || '–')}</div>
-    <p class="muted" style="font-size:12px">Viewer: lesen & Anfragen stellen · User: anlegen & bearbeiten, eigene Einträge löschen · Admin: alles inkl. Administration.</p></div></div>`;
+    <p class="muted" style="font-size:0.75rem">Viewer: lesen & Anfragen stellen · User: anlegen & bearbeiten, eigene Einträge löschen · Admin: alles inkl. Administration.</p></div></div>`;
 };
 /* ---------- Administration ---------- */
 VIEWS.admin = main => {
@@ -1859,37 +1878,37 @@ VIEWS.admin = main => {
   if (tab === 'users') {
     html += `<div class="table-wrap"><table class="t" style="min-width:700px"><thead><tr><th>Name</th><th>Gruppe</th><th>Rechte</th><th>Team / Ressort</th><th>Cutter-Profil</th><th>Pop-ups für</th><th></th></tr></thead><tbody>
       ${db.users.map(u => `<tr><td><input class="input" data-admin="userName" data-id="${u.id}" value="${esc(u.name)}"></td><td><select class="input" data-admin="userGroup" data-id="${u.id}">${GROUPS.map(g => `<option ${(u.group || '') === g ? 'selected' : ''}>${g}</option>`).join('')}</select></td><td><select class="input" data-admin="userRole" data-id="${u.id}">${Object.entries(ROLE_LABEL).map(([k, l]) => `<option value="${k}" ${u.role === k ? 'selected' : ''}>${l}</option>`).join('')}</select></td><td><input class="input" data-admin="userTeam" data-id="${u.id}" value="${esc(u.team || '')}"></td><td>${u.group === 'Cutter' ? `<select class="input" data-admin="userStaff" data-id="${u.id}"><option value="">–</option>${db.staff.filter(s => s.dept === 'Cutter').map(s => `<option value="${s.id}" ${u.staffId === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>` : '<span class="muted">–</span>'}</td><td class="muted">${(u.subs || []).map(s => (MODULES.find(m => m.id === s) || {}).label).filter(Boolean).join(', ')}</td><td>${u.id !== me.id ? `<button class="btn small danger" data-act="delUser" data-id="${u.id}">Entfernen</button>` : '<span class="muted">du</span>'}</td></tr>`).join('')}
-    </tbody></table></div><div class="toolbar" style="margin-top:10px"><button class="btn primary" data-act="addUser">+ Benutzer</button><span class="muted">Gruppe = was jemand sieht (Redaktion, Cutter, Maske …). Rechte = was jemand ändern darf. Im Echtbetrieb kommen beide aus Microsoft Entra ID (Firmen-Login).</span></div>`;
+    </tbody></table></div><div class="toolbar" style="margin-top:8px"><button class="btn primary" data-act="addUser">+ Benutzer</button><span class="muted">Gruppe = was jemand sieht (Redaktion, Cutter, Maske …). Rechte = was jemand ändern darf. Im Echtbetrieb kommen beide aus Microsoft Entra ID (Firmen-Login).</span></div>`;
   } else if (tab === 'studios') {
     html += `<div class="table-wrap"><table class="t" style="min-width:600px"><thead><tr><th>Farbe</th><th>Name</th><th>Mehrfachbelegung erlaubt</th><th>Termine</th><th></th></tr></thead><tbody>
       ${db.studios.map(s => `<tr><td><input type="color" class="color-input" data-admin="studioColor" data-id="${s.id}" value="${s.color}"></td><td><input class="input" data-admin="studioName" data-id="${s.id}" value="${esc(s.name)}"></td><td><input type="checkbox" data-admin="studioParallel" data-id="${s.id}" ${s.parallel ? 'checked' : ''}> <span class="muted">(z. B. Extern)</span></td><td>${db.bookings.filter(b => b.studioId === s.id).length}</td><td><button class="btn small danger" data-act="delStudio" data-id="${s.id}">Entfernen</button></td></tr>`).join('')}
-    </tbody></table></div><div class="toolbar" style="margin-top:10px"><button class="btn primary" data-act="addStudio">+ Studio / Ressource</button></div>`;
+    </tbody></table></div><div class="toolbar" style="margin-top:8px"><button class="btn primary" data-act="addStudio">+ Studio / Ressource</button></div>`;
   } else if (tab === 'fields') {
     const mod = state.f.cfModule; const list = db.fields[mod] || [];
     html += `<div class="toolbar"><span>Bereich:</span><select class="input" data-filter="cfModule">${Object.entries(CF_MODULES).map(([k, l]) => `<option value="${k}" ${k === mod ? 'selected' : ''}>${l}</option>`).join('')}</select><span class="muted">Standardfelder: ${SCHEMA[mod].map(f => f.label.replace(/\s*\(.*\)$/, '')).join(', ')}</span></div>
       <div class="table-wrap"><table class="t" style="min-width:700px"><thead><tr><th>Bezeichnung</th><th>Typ</th><th>Optionen (bei Auswahl, mit Komma)</th><th>In Liste anzeigen</th><th></th></tr></thead><tbody>
       ${list.map((f, i) => `<tr><td><input class="input" data-admin="cfLabel" data-i="${i}" value="${esc(f.label)}"></td><td>${CF_TYPES[f.type]}</td><td>${['select', 'multi'].includes(f.type) ? `<input class="input" style="width:100%" data-admin="cfOptions" data-i="${i}" value="${esc((f.options || []).join(', '))}">` : '<span class="muted">–</span>'}</td><td><input type="checkbox" data-admin="cfInList" data-i="${i}" ${f.inList ? 'checked' : ''}></td><td><button class="btn small danger" data-act="delField" data-i="${i}">Entfernen</button></td></tr>`).join('') || '<tr><td colspan="5" class="empty">Noch keine Zusatzfelder in diesem Bereich.</td></tr>'}
       </tbody></table></div>
-      <div class="card" style="margin-top:12px"><h3>+ Neues Feld</h3><div class="toolbar"><input class="input" id="nfLabel" placeholder="Bezeichnung, z. B. „Rechte-Hinweis“"><select class="input" id="nfType">${Object.entries(CF_TYPES).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select><input class="input" id="nfOptions" placeholder="Optionen (bei Auswahl): A, B, C" style="width:260px"><label class="toggle"><input type="checkbox" id="nfInList" checked> in Liste</label><button class="btn primary" data-act="addField">Feld anlegen</button></div></div>`;
+      <div class="card" style="margin-top:16px"><h3>+ Neues Feld</h3><div class="toolbar"><input class="input" id="nfLabel" placeholder="Bezeichnung, z. B. „Rechte-Hinweis“"><select class="input" id="nfType">${Object.entries(CF_TYPES).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select><input class="input" id="nfOptions" placeholder="Optionen (bei Auswahl): A, B, C" style="width:260px"><label class="toggle"><input type="checkbox" id="nfInList" checked> in Liste</label><button class="btn primary" data-act="addField">Feld anlegen</button></div></div>`;
   } else if (tab === 'lists') {
     const names = { mkLocations: 'Masken-Orte', geo: 'Georestriktionen', platforms: 'Plattformen', modes: 'Live / Relive / Zeitversetzt', depts: 'Gewerke (Personal)', categories: 'Equipment-Kategorien' };
     const c = mkCfg();
-    html += `<div class="card" style="margin-bottom:14px"><h3>💄 Maske – Regeln & Verfügbarkeit</h3>
+    html += `<div class="card" style="margin-bottom:16px"><h3>💄 Maske – Regeln & Verfügbarkeit</h3>
       <div class="toolbar">Vorlauf vor Sendebeginn: Herren <input class="input" type="number" style="width:70px" data-admin="mk" data-key="Herr" value="${c.Herr}"> Min. · Damen <input class="input" type="number" style="width:70px" data-admin="mk" data-key="Dame" value="${c.Dame}"> Min. · davon Weg ins Studio <input class="input" type="number" style="width:70px" data-admin="mk" data-key="buffer" value="${c.buffer}"> Min.</div>
       <div class="toolbar">Maske besetzt von <input class="input" type="time" data-admin="mkTime" data-key="open" value="${c.open}"> bis <input class="input" type="time" data-admin="mkTime" data-key="close" value="${c.close}"> · max. gleichzeitig <input class="input" type="number" min="1" style="width:70px" data-admin="mk" data-key="capacity" value="${c.capacity}"> Personen <span class="muted">(bestimmt, was die Redaktion als „frei“ sieht)</span></div></div>`;
-    html += `<div class="card" style="margin-bottom:14px"><h3>📺 Video Producer</h3><div class="toolbar" style="align-items:flex-start"><div><div class="muted" style="font-size:12px">Zusätzliche allgemeine Punkte für die Tages-Checkliste (optional – die Checkliste ergibt sich aus den Events)</div><textarea class="input" rows="7" style="width:420px" data-admin="vpChecklist">${esc(vpChecklist().join('\n'))}</textarea></div><div><div class="muted" style="font-size:12px">Schichten: <b>Name Beginn Ende</b></div><textarea class="input" rows="3" style="width:220px" data-admin="vpShiftTypes">${esc(vpShiftTypes().map(t => `${t.code} ${t.start} ${t.end}`).join('\n'))}</textarea><div class="muted" style="font-size:12px;margin-top:4px">Video Producer werden unter Personal mit Gewerk „Video Producer“ gepflegt.</div></div></div></div>`;
-    html += `<div class="card" style="margin-bottom:14px"><h3>🎥 Tageskamera</h3><div class="toolbar">Standard-Dienstzeit: <input class="input" style="width:140px" data-admin="tkTimes" value="${esc(((db.options.tkTimes || { start: '09:00', end: '18:00' }).start) + '–' + ((db.options.tkTimes || { start: '09:00', end: '18:00' }).end))}"> <span class="muted" style="font-size:12px">Abweichende Zeiten pro Tag direkt im Dienstplan oder über „Wer ist heute da?“.</span></div></div>`;
-    html += `<div class="card" style="margin-bottom:14px"><h3>✉️ Anfragen</h3><div class="toolbar">E-Mail-Adresse für Ergänzungen zu Anfragen: <input class="input" style="width:260px" data-admin="reqMail" value="${esc(reqMailTo())}"></div></div>`;
-    html += `<div class="card" style="margin-bottom:14px"><h3>✂️ Schnitt – Schichten</h3><div class="toolbar"><textarea class="input" rows="4" style="width:220px" data-admin="shiftTypes">${esc((db.options.shiftTypes || []).map(t => `${t.code} ${t.start}`).join('\n'))}</textarea><div class="muted" style="font-size:12px">Eine Schicht pro Zeile: <b>Kürzel Startzeit</b>, z. B. „C1030 10:30“.<br>Schichtlänge: <input class="input" type="number" min="1" style="width:70px" data-admin="postHours" value="${postHours()}"> Std.</div></div></div>`;
-    html += `<div class="admin-grid">${Object.entries(names).map(([k, l]) => `<div class="card"><h3>${l}</h3><textarea class="input" rows="8" data-admin="list" data-key="${k}">${esc(db.options[k].join('\n'))}</textarea><div class="muted" style="font-size:12px;margin-top:4px">Ein Eintrag pro Zeile · wird beim Verlassen des Feldes gespeichert</div></div>`).join('')}</div>`;
+    html += `<div class="card" style="margin-bottom:16px"><h3>📺 Video Producer</h3><div class="toolbar" style="align-items:flex-start"><div><div class="muted" style="font-size:0.75rem">Zusätzliche allgemeine Punkte für die Tages-Checkliste (optional – die Checkliste ergibt sich aus den Events)</div><textarea class="input" rows="7" style="width:420px" data-admin="vpChecklist">${esc(vpChecklist().join('\n'))}</textarea></div><div><div class="muted" style="font-size:0.75rem">Schichten: <b>Name Beginn Ende</b></div><textarea class="input" rows="3" style="width:220px" data-admin="vpShiftTypes">${esc(vpShiftTypes().map(t => `${t.code} ${t.start} ${t.end}`).join('\n'))}</textarea><div class="muted" style="font-size:0.75rem;margin-top:4px">Video Producer werden unter Personal mit Gewerk „Video Producer“ gepflegt.</div></div></div></div>`;
+    html += `<div class="card" style="margin-bottom:16px"><h3>🎥 Tageskamera</h3><div class="toolbar">Standard-Dienstzeit: <input class="input" style="width:140px" data-admin="tkTimes" value="${esc(((db.options.tkTimes || { start: '09:00', end: '18:00' }).start) + '–' + ((db.options.tkTimes || { start: '09:00', end: '18:00' }).end))}"> <span class="muted" style="font-size:0.75rem">Abweichende Zeiten pro Tag direkt im Dienstplan oder über „Wer ist heute da?“.</span></div></div>`;
+    html += `<div class="card" style="margin-bottom:16px"><h3>✉️ Anfragen</h3><div class="toolbar">E-Mail-Adresse für Ergänzungen zu Anfragen: <input class="input" style="width:260px" data-admin="reqMail" value="${esc(reqMailTo())}"></div></div>`;
+    html += `<div class="card" style="margin-bottom:16px"><h3>✂️ Schnitt – Schichten</h3><div class="toolbar"><textarea class="input" rows="4" style="width:220px" data-admin="shiftTypes">${esc((db.options.shiftTypes || []).map(t => `${t.code} ${t.start}`).join('\n'))}</textarea><div class="muted" style="font-size:0.75rem">Eine Schicht pro Zeile: <b>Kürzel Startzeit</b>, z. B. „C1030 10:30“.<br>Schichtlänge: <input class="input" type="number" min="1" style="width:70px" data-admin="postHours" value="${postHours()}"> Std.</div></div></div>`;
+    html += `<div class="admin-grid">${Object.entries(names).map(([k, l]) => `<div class="card"><h3>${l}</h3><textarea class="input" rows="8" data-admin="list" data-key="${k}">${esc(db.options[k].join('\n'))}</textarea><div class="muted" style="font-size:0.75rem;margin-top:4px">Ein Eintrag pro Zeile · wird beim Verlassen des Feldes gespeichert</div></div>`).join('')}</div>`;
   } else {
     html += `<div class="admin-grid">
       <div class="card"><h3>📥 Streaming-Liste importieren (Excel/CSV)</h3><p class="muted" style="margin-top:0">Erkennt die Spalten deiner bisherigen Liste (Datum, Event Name, Status-Farbe, Georestriktion, Standzeit, Live/Relive, Start-/Endzeit, Plattformen, Free/Plus, Pass, Kommentator, Owner, Kontakt). Zeilen ohne Zeit & Plattform werden als Hinweistag übernommen.</p>
-        <label class="muted" style="font-size:12px">Status, wenn keine Farbe erkannt wird</label><select class="input" id="impDefStatus" style="width:100%;margin:4px 0 10px">${STATUS_STREAM.map(s => `<option ${s === 'Bestätigt' ? 'selected' : ''}>${s}</option>`).join('')}</select>
+        <label class="muted" style="font-size:0.75rem">Status, wenn keine Farbe erkannt wird</label><select class="input" id="impDefStatus" style="width:100%;margin:4px 0 8px">${STATUS_STREAM.map(s => `<option ${s === 'Bestätigt' ? 'selected' : ''}>${s}</option>`).join('')}</select>
         <label class="toggle"><input type="checkbox" id="impSkipDup" checked> Doppelte Einträge (Datum + Name + Start) überspringen</label>
-        <input type="file" id="impFile" accept=".xlsx,.csv" class="input" style="width:100%"><button class="btn primary" style="margin-top:10px" data-act="importStreams">Importieren</button></div>
+        <input type="file" id="impFile" accept=".xlsx,.csv" class="input" style="width:100%"><button class="btn primary" style="margin-top:8px" data-act="importStreams">Importieren</button></div>
       <div class="card"><h3>📤 Export</h3><button class="btn" data-act="exportStreams">Streaming als Excel</button> <button class="btn" data-act="exportEquipment">Equipment als Excel</button><br><br><button class="btn" data-act="backup">Komplett-Backup (JSON)</button></div>
-      <div class="card"><h3>♻️ Wiederherstellen</h3><input type="file" id="restoreFile" accept=".json" class="input" style="width:100%"><button class="btn" style="margin-top:10px" data-act="restore">Backup einspielen</button><hr style="border-color:var(--line);margin:16px 0"><button class="btn danger" data-act="resetDemo">Auf Demo-Daten zurücksetzen</button></div>
+      <div class="card"><h3>♻️ Wiederherstellen</h3><input type="file" id="restoreFile" accept=".json" class="input" style="width:100%"><button class="btn" style="margin-top:8px" data-act="restore">Backup einspielen</button><hr style="border-color:var(--line);margin:16px 0"><button class="btn danger" data-act="resetDemo">Auf Demo-Daten zurücksetzen</button></div>
     </div>`;
   }
   main.innerHTML = html;
@@ -2058,7 +2077,7 @@ function render() {
   const items = [...navItems(), null, { id: 'settings', label: 'Meine Einstellungen', ic: '⚙️' }, ...(can.admin() ? [{ id: 'admin', label: 'Administration', ic: '🛠' }] : [])];
   if (!items.some(m => m && m.id === state.view)) state.view = items[0].id;
   $('#nav').innerHTML = items.map(m => m ? `<div class="nav-item ${state.view === m.id ? 'active' : ''}" data-act="go" data-view="${m.id}"><span class="ic">${m.ic}</span><span class="lbl">${m.id === 'requests' && can.edit() ? 'Anfragen-Eingang' : m.label}</span><span class="badge hidden"></span></div>` : '<div class="nav-sep"></div>').join('');
-  $('#sidefoot').innerHTML = `Prototyp v0.24 · Daten lokal gespeichert<br>${fmtDate(today())}`;
+  $('#sidefoot').innerHTML = `Prototyp v0.30 · Daten lokal gespeichert<br>${fmtDate(today())}`;
   $('#title').textContent = state.view === 'requests' ? (can.edit() ? 'Anfragen-Eingang' : 'Anfragen') : (TITLES[state.view] || '');
   $('#userName').textContent = me.name; $('#userRole').textContent = `${grp()} · ${ROLE_LABEL[me.role]}`;
   const main = $('#main'); const st = main.scrollTop;
@@ -2203,7 +2222,7 @@ function toggleBell() { const p = $('#bellPanel'); if (!p.classList.contains('hi
 function closeBell() { $('#bellPanel').classList.add('hidden'); }
 function renderBell() {
   const items = db.activity.filter(a => a.userId !== me.id && a.ts > (me.since || 0) && visibleAct(a)).sort((a, b) => b.ts - a.ts).slice(0, 40);
-  $('#bellPanel').innerHTML = `<div class="bh"><div style="flex:1"><b>Änderungen von Kolleg*innen</b><div class="muted" style="font-size:11.5px">Die Zahl an der Glocke = ungelesene Änderungen. Die roten Zahlen im Menü = Dinge, die zu erledigen sind.</div></div><button class="btn small" data-act="bellSeen">Alle gelesen</button></div>${items.map(a => { const rec = (db[a.coll] || []).find(x => x.id === a.entityId); const unread = rec && newState(rec); const mod = MODULES.find(m => m.id === COLL_MOD[a.coll]) || {}; return `<div class="notif ${unread ? 'unread' : ''}" data-act="openAct" data-aid="${a.id}"><div>${mod.ic || ''} <b>${esc(a.title)}</b> <span class="muted">${COLL_NAME[a.coll]} ${a.action}</span></div>${a.changes && a.changes.length ? `<div class="ch">${a.changes.slice(0, 3).map(c => `${esc(c.label)}: ${esc(c.to || '–')}`).join(' · ')}</div>` : ''}<small>${esc(userName(a.userId))} · ${fmtTs(a.ts)}${a.date ? ' · für ' + fmtShort(a.date) : ''}</small></div>`; }).join('') || '<div class="empty" style="padding:14px">Keine Neuigkeiten.</div>'}`;
+  $('#bellPanel').innerHTML = `<div class="bh"><div style="flex:1"><b>Änderungen von Kolleg*innen</b><div class="muted" style="font-size:0.75rem">Die Zahl an der Glocke = ungelesene Änderungen. Die roten Zahlen im Menü = Dinge, die zu erledigen sind.</div></div><button class="btn small" data-act="bellSeen">Alle gelesen</button></div>${items.map(a => { const rec = (db[a.coll] || []).find(x => x.id === a.entityId); const unread = rec && newState(rec); const mod = MODULES.find(m => m.id === COLL_MOD[a.coll]) || {}; return `<div class="notif ${unread ? 'unread' : ''}" data-act="openAct" data-aid="${a.id}"><div>${mod.ic || ''} <b>${esc(a.title)}</b> <span class="muted">${COLL_NAME[a.coll]} ${a.action}</span></div>${a.changes && a.changes.length ? `<div class="ch">${a.changes.slice(0, 3).map(c => `${esc(c.label)}: ${esc(c.to || '–')}`).join(' · ')}</div>` : ''}<small>${esc(userName(a.userId))} · ${fmtTs(a.ts)}${a.date ? ' · für ' + fmtShort(a.date) : ''}</small></div>`; }).join('') || '<div class="empty" style="padding:16px">Keine Neuigkeiten.</div>'}`;
 }
 /* ---------- Live-Benachrichtigung (andere Fenster / Benutzer) ---------- */
 function wantsNotify(a) {
@@ -2262,9 +2281,9 @@ function greet() {
 function showLogin() {
   $('#app').classList.add('hidden'); closeBell(); closeModal();
   const L = $('#login'); L.classList.remove('hidden');
-  L.innerHTML = `<div class="login-box"><span class="logo" style="width:44px;height:44px;font-size:18px">PH</span><h2>Production Hub</h2><p>Demo-Anmeldung – wähle eine Person. Im Echtbetrieb erfolgt der Login über das Microsoft-Firmenkonto.</p>
+  L.innerHTML = `<div class="login-box"><span class="logo" style="width:44px;height:44px;font-size:1.25rem">PH</span><h2>Production Hub</h2><p>Demo-Anmeldung – wähle eine Person. Im Echtbetrieb erfolgt der Login über das Microsoft-Firmenkonto.</p>
     ${db.users.map(u => `<div class="user-opt" data-act="login" data-id="${u.id}"><div class="avatar">${initials(u.name)}</div><div>${esc(u.name)}<small>${esc(u.group || '')}${u.team && u.team !== '–' ? ' · ' + esc(u.team) : ''}</small></div><span class="badge ${u.role === 'admin' ? 'bad' : u.role === 'user' ? 'info' : ''}">${ROLE_LABEL[u.role]}</span></div>`).join('')}
-    <p class="muted" style="font-size:12px;margin-top:14px">Tipp: Öffne die App in zwei Fenstern – z. B. als „Lisa Redaktion“ oder „Cutter A“ und als Mathias. Stellt die Redaktion eine Anfrage, erscheint sie im anderen Fenster sofort beim Maskenplan bzw. Studioplan.</p></div>`;
+    <p class="muted" style="font-size:0.75rem;margin-top:16px">Tipp: Öffne die App in zwei Fenstern – z. B. als „Lisa Redaktion“ oder „Cutter A“ und als Mathias. Stellt die Redaktion eine Anfrage, erscheint sie im anderen Fenster sofort beim Maskenplan bzw. Studioplan.</p></div>`;
 }
 /* ---------- Globale Events ---------- */
 document.addEventListener('click', e => {
@@ -2306,7 +2325,7 @@ function reqBy(r) {
   const base = u ? `${u.name}${u.team && u.team !== '–' ? ' · ' + u.team : ''}` : 'Unbekannt';
   return r.requester && u && !r.requester.startsWith(u.name) ? `${base} (für ${r.requester})` : base;
 }
-const reqWhen = r => `${fmtShort(r.date)} ${r.onAir || ''}${r.end && wantsStudio(r) ? '–' + r.end : ''}`;
+const reqWhen = r => r.mkStart && !/Studio/.test(r.reqType) ? `${fmtShort(r.date)} Maske ab ${r.mkStart}` : `${fmtShort(r.date)} ${r.onAir || ''}${r.end && wantsStudio(r) ? '–' + r.end : ''}`;
 function applyRequestTemplate(form, talent) {
   const last = db.requests.filter(r => r.talent === talent).sort((a, b) => b.createdAt - a.createdAt)[0];
   const set = (n, v) => { const el = $(`[name="${n}"]`, form); if (el && v && !el.value) el.value = v; };
@@ -2344,9 +2363,9 @@ function newRequest(pre = {}, chainRest = []) {
     title: `📨 ${wantsStudio(base) ? (wantsMk(base) ? 'Studio + Maske' : 'Studio') : 'Maske'} anfragen${chainRest.length ? ` (noch ${chainRest.length} weitere)` : ''}`,
     info: can.edit() ? 'Anfrage wird angelegt und kann danach direkt eingeplant werden.' : 'Nur ausfüllen und abschicken – die Produktion bekommt die Anfrage sofort im Masken- bzw. Studioplan und bestätigt hier. Bekannte Personen füllen sich automatisch.',
     saveLabel: can.edit() ? 'Anlegen' : '📨 Anfrage senden',
-    afterSave: () => {
+    afterSave: (r) => {
       if (chainRest.length) setTimeout(() => newRequest(chainRest[0], chainRest.slice(1)), 0);
-      else toast(can.edit() ? '📨 Anfrage angelegt' : '📨 Anfrage gesendet – die Produktion wurde benachrichtigt.', 'ok');
+      else reqToast(can.edit() ? 'Anfrage angelegt – du kannst sie jetzt direkt einplanen.' : 'Anfrage gesendet – die Produktion wurde benachrichtigt und bestätigt hier.', 'requests', r && r.id);
     },
   });
 }
@@ -2373,9 +2392,9 @@ function confirmRequest(id) {
     const made = [], n = ppl.length, cap = mkCfg().capacity;
     const step = k => {
       if (k >= n) { finish(b, made); return; }
-      const p = ppl[k], plan = mkPlan(b && b.start ? b : { start: r.onAir }, p.gender || 'Herr', '');
+      const p = ppl[k], wd0 = r.mkStart ? (+r.mkDuration || mkStdDur(p.gender || 'Herr')) : 0, plan = r.mkStart ? { start: r.mkStart, duration: wd0 } : mkPlan(b && b.start ? b : { start: r.onAir }, p.gender || 'Herr', '');
       const back = plan ? Math.floor((n - 1 - k) / cap) * plan.duration : 0;
-      const start = plan ? mint(tmin(plan.start) - back) : r.onAir;
+      const start = r.mkStart ? mint(tmin(r.mkStart) + Math.floor(k / cap) * plan.duration) : plan ? mint(tmin(plan.start) - back) : r.onAir;
       openForm('makeup', { talent: p.name, gender: p.gender || '', date: r.date, bookingId: b ? b.id : '', start, duration: plan ? plan.duration : 20, kind: mkKind(p.gender || 'Herr', plan ? plan.duration : 20) || 'Puder & Haar-Fix', location: r.location || MK_LOCS[0], production: r.production, notes: r.notes || '', custom: {} }, {
         title: `💄 Maske${n > 1 ? ` (${k + 1}/${n})` : ''} für Anfrage: ${esc(r.production || '')}`,
         info: `Anfrage von <b>${esc(reqBy(r))}</b> · ${reqWhen(r)}${b ? ` · verknüpft mit <b>${esc(b.title)}</b>` : ' · kein Studio-Termin an diesem Tag gefunden'}<br>${n > 1 ? `${n} Personen – werden nacheinander bzw. parallel (max. ${cap}) vor Beginn eingeplant. ` : ''}Beim Speichern ${k + 1 < n ? 'öffnet sich die nächste Person' : 'wird die Anfrage bestätigt'}.`,
@@ -2398,7 +2417,7 @@ function confirmRequest(id) {
 function rejectRequest(id) {
   const r = db.requests.find(x => x.id === id); if (!r) return;
   const quick = ['Maske zu der Zeit leider voll – geht es 30 Min. früher?', 'Studio an dem Tag belegt – alternatives Studio möglich?', 'Bitte mit der Produktion telefonisch abstimmen.'];
-  const m = showModal(`✕ Anfrage ablehnen: ${esc(reqTitle(r))}`, `<div class="infobox">${reqWhen(r)} · ${esc(r.reqType)} · von ${esc(reqBy(r))}</div><label class="muted" style="font-size:12px">Kurze Begründung / Alternative für die Redaktion</label><textarea class="input" id="rejNote" rows="4" style="margin-top:4px"></textarea><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${quick.map(q => `<span class="chip" data-q="${esc(q)}">${esc(q)}</span>`).join('')}</div>`,
+  const m = showModal(`✕ Anfrage ablehnen: ${esc(reqTitle(r))}`, `<div class="infobox">${reqWhen(r)} · ${esc(r.reqType)} · von ${esc(reqBy(r))}</div><label class="muted" style="font-size:0.75rem">Kurze Begründung / Alternative für die Redaktion</label><textarea class="input" id="rejNote" rows="4" style="margin-top:4px"></textarea><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${quick.map(q => `<span class="chip" data-q="${esc(q)}">${esc(q)}</span>`).join('')}</div>`,
     '<button class="btn" data-m="close">Abbrechen</button><button class="btn danger" id="rejGo">Ablehnen</button>', 'small');
   m.addEventListener('click', e => { const q = e.target.closest('[data-q]'); if (q) $('#rejNote', m).value = q.dataset.q; });
   $('#rejGo', m).addEventListener('click', () => {
@@ -2443,7 +2462,7 @@ VIEWS.requests = main => {
     }
     html += `<div class="strips">${rows}</div>`;
     const list = editor ? openReqs('mk').sort(byDate) : db.requests.filter(r => r.createdBy === me.id && wantsMk(r) && r.date >= T).sort(byDate);
-    html += `<div class="card" style="margin-top:14px"><h3>${editor ? '📨 Offene Masken-Anfragen' : '📋 Meine kommenden Masken-Anfragen'} <span class="badge">${list.length}</span></h3>${editor ? openReqRows(list) : list.map(r => `<div class="list-row" data-act="open" data-coll="requests" data-id="${r.id}"><div class="time">${reqWhen(r)}</div><div><div>${esc(reqTitle(r))}${newCell(r)}</div><div class="sub"><span class="badge ${REQ_CLS[r.status]}">${esc(r.status)}</span> ${esc(r.confirmText || r.prodNote || '')}</div></div></div>`).join('')}${list.length ? '' : '<div class="empty">Keine.</div>'}</div>`;
+    html += `<div class="card" style="margin-top:16px"><h3>${editor ? '📨 Offene Masken-Anfragen' : '📋 Meine kommenden Masken-Anfragen'} <span class="badge">${list.length}</span></h3>${editor ? openReqRows(list) : list.map(r => `<div class="list-row" data-act="open" data-coll="requests" data-id="${r.id}"><div class="time">${reqWhen(r)}</div><div><div>${esc(reqTitle(r))}${newCell(r)}</div><div class="sub"><span class="badge ${REQ_CLS[r.status]}">${esc(r.status)}</span> ${esc(r.confirmText || r.prodNote || '')}</div></div></div>`).join('')}${list.length ? '' : '<div class="empty">Keine.</div>'}</div>`;
   } else if (tab === 'studio') {
     const from = 7 * 60, to = 23 * 60, past = D < T;
     html += `${dateNav('requests', `${WDL[parseISO(D).getDay()]}, ${fmtDate(D)}`, 'day')}<span class="spacer"></span><button class="btn primary" data-act="${editor ? 'newBooking' : 'newRequest'}" data-type="Studio">${editor ? '+ Termin direkt anlegen' : '📨 Studio anfragen'}</button></div>
@@ -2496,7 +2515,7 @@ function parseMail(text) {
   return found;
 }
 function fromMailDialog() {
-  const m = showModal('📋 Anfrage aus E-Mail übernehmen', `<div class="infobox">E-Mail-Text (z. B. vom Show-Ressort) einfach hier hineinkopieren. Das Tool erkennt Datum, Uhrzeit, bekannte Personen, Sendung und Ort und legt daraus Anfragen an. Du prüfst alles, bevor gespeichert wird.</div><textarea class="input" id="mailText" rows="12" placeholder="Hallo zusammen,\nkönnt ihr für Tanja May am Donnerstag um 14 Uhr Maske im 3. OG einplanen? Es geht um den Show-Talk.\n\nViele Grüße\nAssistenz Show"></textarea><div id="mailPreview" class="muted" style="margin-top:8px;font-size:12px"></div>`,
+  const m = showModal('📋 Anfrage aus E-Mail übernehmen', `<div class="infobox">E-Mail-Text (z. B. vom Show-Ressort) einfach hier hineinkopieren. Das Tool erkennt Datum, Uhrzeit, bekannte Personen, Sendung und Ort und legt daraus Anfragen an. Du prüfst alles, bevor gespeichert wird.</div><textarea class="input" id="mailText" rows="12" placeholder="Hallo zusammen,\nkönnt ihr für Tanja May am Donnerstag um 14 Uhr Maske im 3. OG einplanen? Es geht um den Show-Talk.\n\nViele Grüße\nAssistenz Show"></textarea><div id="mailPreview" class="muted" style="margin-top:8px;font-size:0.75rem"></div>`,
     '<button class="btn" data-m="close">Abbrechen</button><button class="btn primary" data-act="mailGo">Weiter</button>');
   const ta = $('#mailText', m);
   ta.addEventListener('input', () => { const p = parseMail(ta.value); $('#mailPreview', m).innerHTML = ta.value.trim() ? `Erkannt: ${p.date ? '📅 ' + fmtShort(p.date) : '📅 –'} · ${p.onAir ? '🕐 ' + p.onAir : '🕐 –'} · 👤 ${p.talents.length ? esc(p.talents.join(', ')) : 'unbekannt'} · ${esc(p.reqType)}${p.production ? ' · ' + esc(p.production) : ''}${p.location ? ' · ' + esc(p.location) : ''}` : ''; });
@@ -2605,7 +2624,7 @@ function editInfo(form, cur) {
   }
   const d = cur.workDate || today();
   const list = cutters().map(p => ({ p, sh: shiftOf(p.id, d), free: Math.max(0, capOn(p.id, d) - loadOn(p.id, d, cur.id)) })).filter(x => x.sh).sort((a, b) => b.free - a.free);
-  el.innerHTML = `<b>Wer ist am ${fmtShort(d)} da?</b> ${list.length ? '' : 'Keine Cutter im Dienst.'}<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${list.map(x => `<span class="chip ${cur.staffId === x.p.id ? '' : ''}" data-pick="${x.p.id}" style="${cur.staffId === x.p.id ? 'border-color:#fff' : ''}">${shiftChip(x.sh.code)} ${esc(x.p.name)} · <b style="color:${x.free >= (+cur.estHours || 0) / Math.max(1, editDays({ ...cur, staffId: x.p.id, workDate: d }).length) ? '#86efac' : x.free ? '#fde68a' : '#fca5a5'}">${fmtH(x.free)} frei</b></span>`).join('')}</div>`;
+  el.innerHTML = `<b>Wer ist am ${fmtShort(d)} da?</b> ${list.length ? '' : 'Keine Cutter im Dienst.'}<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${list.map(x => `<span class="chip ${cur.staffId === x.p.id ? '' : ''}" data-pick="${x.p.id}" style="${cur.staffId === x.p.id ? 'border-color:#fff' : ''}">${shiftChip(x.sh.code)} ${esc(x.p.name)} · <b style="color:${x.free >= (+cur.estHours || 0) / Math.max(1, editDays({ ...cur, staffId: x.p.id, workDate: d }).length) ? '#86efac' : x.free ? '#fde68a' : '#fca5a5'}">${fmtH(x.free)} frei</b></span>`).join('')}</div>`;
 }
 /* ---------- Karten & Bausteine ---------- */
 function editCard(e, opts = {}) {
@@ -2667,7 +2686,7 @@ function postBoard(D) {
   const overdue = db.edits.filter(e => isActiveEdit(e) && e.deadline && e.deadline < T).length;
   const dueToday = db.edits.filter(e => isActiveEdit(e) && e.deadline === D).length;
   let html = `<div class="kpis"><div class="kpi"><b>${on.filter(x => x.sh).length}</b><span>Cutter im Dienst</span></div><div class="kpi"><b>${fmtH(load)} / ${fmtH(cap)}</b><span>verplant / Kapazität</span></div><div class="kpi"><b>${fmtH(Math.max(0, cap - load))}</b><span>noch frei</span></div><div class="kpi ${dueToday ? 'hot' : ''}"><b>${dueToday}</b><span>Abgaben an diesem Tag</span></div>${can.edit() ? `<div class="kpi ${backlog.length ? 'hot' : ''}"><b>${backlog.length}</b><span>nicht zugewiesen</span></div>` : ''}${overdue ? `<div class="kpi hot"><b class="hint-red">${overdue}</b><span>Abgabe überfällig</span></div>` : ''}</div>`;
-  if (can.edit()) html += `<div class="muted" style="font-size:12px;margin:-6px 0 10px">Schnitte per <b>Drag & Drop</b> aus „Nicht zugewiesen“ auf einen Cutter ziehen (oder zwischen Cuttern verschieben). Zurück nach links = Zuweisung aufheben.</div>`;
+  if (can.edit()) html += `<div class="muted" style="font-size:0.75rem;margin:-8px 0 8px">Schnitte per <b>Drag & Drop</b> aus „Nicht zugewiesen“ auf einen Cutter ziehen (oder zwischen Cuttern verschieben). Zurück nach links = Zuweisung aufheben.</div>`;
   html += `<div class="pboard">`;
   if (can.edit()) html += `<div class="pcol backlog" data-drop="" data-date="${D}"><div class="pcol-h"><b>📥 Nicht zugewiesen</b><small>${backlog.length} Schnitt${backlog.length === 1 ? '' : 'e'} · ${fmtH(backlog.reduce((s, e) => s + (+e.estHours || 0), 0))}</small></div><div class="pcol-b">${backlog.map(e => editCard(e)).join('') || '<div class="empty">Alles verteilt 👍</div>'}</div></div>`;
   on.forEach(({ p, sh }) => {
@@ -2675,7 +2694,7 @@ function postBoard(D) {
     const l = loadOn(p.id, D), c = capOn(p.id, D);
     html += `<div class="pcol ${sh ? '' : 'noshift'}" data-drop="${p.id}" data-date="${D}"><div class="pcol-h">${sh ? shiftChip(sh.code) : '<span class="badge bad">kein Dienst</span>'} <b>${esc(p.name)}</b><small>${sh ? shiftRangeOf(sh) : 'hat Schnitte, aber keine Schicht'} · ${esc(p.employment || '')}</small>${loadBar(l, c || postHours())}<small>${fmtH(l)} von ${fmtH(c)} · <b style="color:${c - l > 0.01 ? '#86efac' : '#fca5a5'}">${fmtH(Math.max(0, c - l))} frei</b></small></div><div class="pcol-b">${jobs.map(e => editCard(e)).join('') || '<div class="empty">frei</div>'}</div></div>`;
   });
-  if (!on.length) html += `<div class="empty" style="padding:20px">An diesem Tag ist kein Cutter eingeplant. Schichten unter „Wer ist wann da?“ eintragen.</div>`;
+  if (!on.length) html += `<div class="empty" style="padding:24px">An diesem Tag ist kein Cutter eingeplant. Schichten unter „Wer ist wann da?“ eintragen.</div>`;
   return html + '</div>';
 }
 function postWeek(ws) {
@@ -2687,14 +2706,14 @@ function postWeek(ws) {
       const sh = shiftOf(p.id, d), l = loadOn(p.id, d), c = capOn(p.id, d);
       const jobs = db.edits.filter(e => e.staffId === p.id && isActiveEdit(e) && editOnDay(e, d));
       g += `<div class="cell ${sh ? '' : 'off'}" ${can.edit() ? `data-act="shiftCell" data-staff="${p.id}" data-date="${d}"` : sh ? `data-act="postDay" data-date="${d}"` : ''} style="cursor:${can.edit() || sh ? 'pointer' : 'default'}">
-        ${sh ? `<div>${shiftChip(sh.code)} <span class="muted" style="font-size:11px">${shiftRangeOf(sh)}</span></div>${loadBar(l, c)}<div style="font-size:11px;color:${c - l > 0.01 ? '#86efac' : '#fca5a5'}">${fmtH(Math.max(0, c - l))} frei</div>` : '<div class="muted" style="font-size:11px">–</div>'}
-        ${jobs.slice(0, 2).map(e => `<div class="achip" data-act="open" data-coll="edits" data-id="${e.id}">${esc(e.title)}</div>`).join('')}${jobs.length > 2 ? `<div class="muted" style="font-size:11px">+${jobs.length - 2} weitere</div>` : ''}
+        ${sh ? `<div>${shiftChip(sh.code)} <span class="muted" style="font-size:0.75rem">${shiftRangeOf(sh)}</span></div>${loadBar(l, c)}<div style="font-size:0.75rem;color:${c - l > 0.01 ? '#86efac' : '#fca5a5'}">${fmtH(Math.max(0, c - l))} frei</div>` : '<div class="muted" style="font-size:0.75rem">–</div>'}
+        ${jobs.slice(0, 2).map(e => `<div class="achip" data-act="open" data-coll="edits" data-id="${e.id}">${esc(e.title)}</div>`).join('')}${jobs.length > 2 ? `<div class="muted" style="font-size:0.75rem">+${jobs.length - 2} weitere</div>` : ''}
       </div>`;
     });
   });
   g += `<div class="who"><b>Gesamt</b><small>im Dienst · frei</small></div>`;
-  days.forEach(d => { const on = cutters().filter(p => shiftOf(p.id, d)); const free = on.reduce((s, p) => s + freeOn(p.id, d), 0); const byCode = shiftTypes().map(t => [t.code, on.filter(p => shiftOf(p.id, d).code === t.code).length]).filter(x => x[1]); g += `<div class="cell" style="cursor:default"><div style="font-size:11px">${byCode.map(([c, n]) => `${shiftChip(c)}×${n}`).join(' ') || '<span class="muted">niemand</span>'}</div><div style="font-size:11px" class="muted">${on.length} Cutter · ${fmtH(free)} frei</div></div>`; });
-  return g + `</div><div class="muted" style="margin-top:8px;font-size:12px">${shiftTypes().map(t => `${shiftChip(t.code)} ${shiftRange(t.code)}`).join(' · ')} · je ${postHours()} Std.${can.edit() ? ' · In eine Zelle klicken, um die Schicht zu setzen oder zu entfernen.' : ''}</div>`;
+  days.forEach(d => { const on = cutters().filter(p => shiftOf(p.id, d)); const free = on.reduce((s, p) => s + freeOn(p.id, d), 0); const byCode = shiftTypes().map(t => [t.code, on.filter(p => shiftOf(p.id, d).code === t.code).length]).filter(x => x[1]); g += `<div class="cell" style="cursor:default"><div style="font-size:0.75rem">${byCode.map(([c, n]) => `${shiftChip(c)}×${n}`).join(' ') || '<span class="muted">niemand</span>'}</div><div style="font-size:0.75rem" class="muted">${on.length} Cutter · ${fmtH(free)} frei</div></div>`; });
+  return g + `</div><div class="muted" style="margin-top:8px;font-size:0.75rem">${shiftTypes().map(t => `${shiftChip(t.code)} ${shiftRange(t.code)}`).join(' · ')} · je ${postHours()} Std.${can.edit() ? ' · In eine Zelle klicken, um die Schicht zu setzen oder zu entfernen.' : ''}</div>`;
 }
 function postPipeline() {
   const T = today();
@@ -2704,14 +2723,14 @@ function postPipeline() {
 function postPipelineHtml() {
   const T = today(), list = postPipeline();
   const missingPast = list.filter(x => !x.edits.length && x.b.date < T);
-  const row = ({ b, edits }) => `<div class="list-row" data-act="open" data-coll="bookings" data-id="${b.id}"><div class="time">${fmtShort(b.date)}<br>${b.allDay ? 'ganztägig' : b.start + '–' + b.end}</div><div style="flex:1"><div><b>${b.type === 'Dreh' ? '🎥 ' : ''}${esc(b.title)}</b>${newCell(b)}</div><div class="sub"><i class="sw" style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${studioById(b.studioId).color}"></i> ${esc(studioById(b.studioId).name)} · ${esc(b.type)}${b.producer ? ' · ' + esc(b.producer) : ''}${b.guests ? ' · ' + esc(b.guests) : ''}</div>
+  const row = ({ b, edits }) => `<div class="list-row" data-act="open" data-coll="bookings" data-id="${b.id}"><div class="time">${fmtShort(b.date)}<br>${b.allDay ? 'ganztägig' : b.start + '–' + b.end}</div><div style="flex:1"><div><b>${b.type === 'Dreh' ? '🎥 ' : ''}${esc(b.title)}</b>${newCell(b)}</div><div class="sub"><i class="sw" style="display:inline-block;width:8px;height:8px;border-radius:4px;background:${studioById(b.studioId).color}"></i> ${esc(studioById(b.studioId).name)} · ${esc(b.type)}${b.producer ? ' · ' + esc(b.producer) : ''}${b.guests ? ' · ' + esc(b.guests) : ''}</div>
     <div class="sub">${edits.length ? edits.map(e => `<span class="badge ${EDIT_CLS[e.status] || ''}">${esc(e.status)} ${e.progress || 0}%</span> ${esc(e.title)} ${e.staffId ? '· ✂️ ' + esc((staffById(e.staffId) || {}).name || '') : '· <span class="hint-red">kein Cutter</span>'}`).join('<br>') : '<span class="hint-red">noch kein Schnitt angelegt</span>'}</div></div>
     ${can.edit() ? `<div class="acts">${edits.length ? '' : `<button class="btn small primary" data-act="newEditFromBooking" data-id="${b.id}">✂️ Schnitt anlegen</button>`}<button class="btn small" data-act="noPost" data-id="${b.id}" title="Diese Produktion braucht keinen Schnitt">kein Schnitt</button></div>` : ''}</div>`;
   let html = `<div class="infobox">Hier erscheinen alle Produktionen der letzten 7 und nächsten 14 Tage, die in der Post-Produktion enden: <b>Drehs</b>, <b>Extern</b>, <b>Schreibtisch</b> und alle Studio-Termine mit Häkchen „Schnitt / Post-Produktion nötig“.</div>`;
-  if (missingPast.length && can.edit()) html += `<div class="card" style="border-color:var(--new);margin-bottom:14px"><h3>⚠️ Bereits produziert, aber noch kein Schnitt <span class="badge new">${missingPast.length}</span></h3>${missingPast.map(row).join('')}</div>`;
+  if (missingPast.length && can.edit()) html += `<div class="card" style="border-color:var(--new);margin-bottom:16px"><h3>⚠️ Bereits produziert, aber noch kein Schnitt <span class="badge new">${missingPast.length}</span></h3>${missingPast.map(row).join('')}</div>`;
   const upcoming = list.filter(x => x.b.date >= T || x.edits.length || !can.edit());
   const days = [...new Set(upcoming.map(x => x.b.date))];
-  html += days.map(d => `<div class="card" style="margin-bottom:10px"><h3>${WDL[parseISO(d).getDay()]}, ${fmtDate(d)}${d === T ? ' · Heute' : ''} <span class="badge">${upcoming.filter(x => x.b.date === d).length}</span></h3>${upcoming.filter(x => x.b.date === d).map(row).join('')}</div>`).join('') || '<div class="empty">Keine anstehenden Produktionen mit Schnitt.</div>';
+  html += days.map(d => `<div class="card" style="margin-bottom:8px"><h3>${WDL[parseISO(d).getDay()]}, ${fmtDate(d)}${d === T ? ' · Heute' : ''} <span class="badge">${upcoming.filter(x => x.b.date === d).length}</span></h3>${upcoming.filter(x => x.b.date === d).map(row).join('')}</div>`).join('') || '<div class="empty">Keine anstehenden Produktionen mit Schnitt.</div>';
   return html;
 }
 function postMine() {
@@ -2724,9 +2743,9 @@ function postMine() {
   const l = loadOn(me.staffId, T);
   return `<div class="hero"><div class="grow"><h2>${sh ? `Heute: ${shiftChip(sh.code)} ${shiftRangeOf(sh)}` : 'Heute kein Dienst'}</h2><p>${sh ? `${fmtH(l)} von ${fmtH(postHours())} verplant · ${mine.filter(e => editOnDay(e, T)).length} Schnitt(e) für heute` : 'Deine nächsten Dienste siehst du rechts.'}</p></div><div class="legend">${next.map(x => `<span>${shiftChip(x.s.code)} ${fmtShort(x.d)}</span>`).join('') || 'Keine Dienste in den nächsten 14 Tagen.'}</div></div>
     <div class="grid"><div class="card"><h3>✂️ Heute</h3>${mine.filter(e => editOnDay(e, T)).map(e => editCard(e, { quick: true, noDrag: true })).join('') || '<div class="empty">Für heute ist nichts zugewiesen.</div>'}</div>
-    <div class="card"><h3>📅 Als Nächstes</h3>${mine.filter(e => !editOnDay(e, T)).map(e => `<div class="muted" style="font-size:12px;margin:6px 0 2px">${e.workDate ? 'Schnitt ' + fmtShort(e.workDate) : 'ohne Termin'}</div>${editCard(e, { quick: true, noDrag: true })}`).join('') || '<div class="empty">Nichts weiter geplant.</div>'}</div>
+    <div class="card"><h3>📅 Als Nächstes</h3>${mine.filter(e => !editOnDay(e, T)).map(e => `<div class="muted" style="font-size:0.75rem;margin:8px 0 4px">${e.workDate ? 'Schnitt ' + fmtShort(e.workDate) : 'ohne Termin'}</div>${editCard(e, { quick: true, noDrag: true })}`).join('') || '<div class="empty">Nichts weiter geplant.</div>'}</div>
     <div class="card"><h3>✅ Zuletzt fertig</h3>${done.map(e => editCard(e, { noDrag: true })).join('') || '<div class="empty">–</div>'}</div></div>
-    <div class="muted" style="font-size:12px;margin-top:10px">Mit <b>✅ Fertig melden</b> gibst du einen Schnitt ab (optional mit Speicherort/Link und Notiz) – die Produktion wird sofort benachrichtigt. Status und Fortschritt kannst du jederzeit hier oder im Schnitt (Klick) ändern.</div>`;
+    <div class="muted" style="font-size:0.75rem;margin-top:8px">Mit <b>✅ Fertig melden</b> gibst du einen Schnitt ab (optional mit Speicherort/Link und Notiz) – die Produktion wird sofort benachrichtigt. Status und Fortschritt kannst du jederzeit hier oder im Schnitt (Klick) ändern.</div>`;
 }
 function postList() {
   const f = state.f.editStatus;
@@ -2818,7 +2837,7 @@ function studioFreeInfo(form, cur) {
   if (cur.allDay || !cur.date || !cur.start || !cur.end) { el.className = 'hidden'; return; }
   el.className = 'infobox';
   const list = studiosFreeAt(cur.date, cur.start, cur.end, cur.id);
-  el.innerHTML = `<b>${fmtShort(cur.date)} ${cur.start}–${cur.end}:</b> <span class="muted">Studio anklicken zum Wählen</span><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${list.map(x => `<span class="chip" data-pickstudio="${x.st.id}" style="${cur.studioId === x.st.id ? 'border-color:#fff;' : ''}${x.free ? '' : 'opacity:.55'}" title="${x.hit ? esc(x.hit.title + ' ' + (x.hit.allDay ? 'ganztägig' : x.hit.start + '–' + x.hit.end)) : 'frei'}"><i style="background:${x.st.color}"></i>${esc(x.st.name)} ${x.free ? '<b style="color:#86efac">frei</b>' : `<b style="color:#fca5a5">${isBlock(x.hit.type) ? esc(x.hit.type) : 'belegt'}</b>`}</span>`).join('')}</div>`;
+  el.innerHTML = `<b>${fmtShort(cur.date)} ${cur.start}–${cur.end}:</b> <span class="muted">Studio anklicken zum Wählen</span><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${list.map(x => `<span class="chip" data-pickstudio="${x.st.id}" style="${cur.studioId === x.st.id ? 'border-color:#fff;' : ''}${x.free ? '' : 'opacity:.55'}" title="${x.hit ? esc(x.hit.title + ' ' + (x.hit.allDay ? 'ganztägig' : x.hit.start + '–' + x.hit.end)) : 'frei'}"><i style="background:${x.st.color}"></i>${esc(x.st.name)} ${x.free ? '<b style="color:#86efac">frei</b>' : `<b style="color:#fca5a5">${isBlock(x.hit.type) ? esc(x.hit.type) : 'belegt'}</b>`}</span>`).join('')}</div>`;
 }
 function parallelBooking(id) {
   const b = db.bookings.find(x => x.id === id); if (!b) return;
@@ -2836,14 +2855,14 @@ function moveConfirm(b, nb, w, mks) {
     const ch = (a, c) => a !== c ? `<b style="color:#fde68a">${esc(c)}</b>` : esc(c);
     const shift = tmin(nb.start) - tmin(b.start);
     L.innerHTML = `<div class="modal small"><div class="modal-h"><h2>🎬 Wirklich neu planen?</h2></div><div class="modal-b">
-      <div style="font-weight:600;margin-bottom:10px">${esc(b.title)}</div>
+      <div style="font-weight:600;margin-bottom:8px">${esc(b.title)}</div>
       <table class="mvtab"><tr><td></td><th>Bisher</th><th>Neu</th></tr>
         <tr><td class="muted">Tag</td><td>${fmtShort(b.date)}</td><td>${ch(fmtShort(b.date), fmtShort(nb.date))}</td></tr>
         <tr><td class="muted">Zeit</td><td>${b.start}–${b.end}</td><td>${ch(`${b.start}–${b.end}`, `${nb.start}–${nb.end}`)}</td></tr>
         <tr><td class="muted">Studio</td><td>${esc(studioById(b.studioId).name)}</td><td>${ch(studioById(b.studioId).name, studioById(nb.studioId).name)}</td></tr></table>
-      ${mks.length ? `<div class="infobox" style="margin-top:12px">💄 ${mks.length} Masken-Slot${mks.length > 1 ? 's werden' : ' wird'} mitverschoben${shift ? ` (${shift > 0 ? '+' : ''}${shift} Min.)` : ''} – die WELT-Maske sieht die Änderung.</div>` : ''}
-      ${w.length ? `<div class="warnbox" style="margin-top:12px">⚠️ <b>Konflikt</b><ul>${w.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
-      ${w.length ? '' : `<label class="toggle muted" style="font-size:12px;margin-top:8px"><input type="checkbox" id="mvSkip"> Bis zum Neuladen nicht mehr nachfragen (Konflikte werden trotzdem gemeldet)</label>`}
+      ${mks.length ? `<div class="infobox" style="margin-top:16px">💄 ${mks.length} Masken-Slot${mks.length > 1 ? 's werden' : ' wird'} mitverschoben${shift ? ` (${shift > 0 ? '+' : ''}${shift} Min.)` : ''} – die WELT-Maske sieht die Änderung.</div>` : ''}
+      ${w.length ? `<div class="warnbox" style="margin-top:16px">⚠️ <b>Konflikt</b><ul>${w.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+      ${w.length ? '' : `<label class="toggle muted" style="font-size:0.75rem;margin-top:8px"><input type="checkbox" id="mvSkip"> Bis zum Neuladen nicht mehr nachfragen (Konflikte werden trotzdem gemeldet)</label>`}
     </div><div class="modal-f"><button class="btn" data-c="0">Abbrechen</button><button class="btn ${w.length ? 'danger' : 'primary'}" data-c="1">${w.length ? 'Trotzdem verschieben' : 'Ja, neu planen'}</button></div></div>`;
     L.classList.remove('hidden');
     const done = ok => { const sk = $('#mvSkip', L); if (ok && sk && sk.checked) skipMoveConfirm = true; L.classList.add('hidden'); L.innerHTML = ''; document.removeEventListener('keydown', key, true); res(ok); };
@@ -2958,7 +2977,7 @@ function dupInfo(form, cur) {
   el.className = 'dupbox';
   el.innerHTML = `<b>🤔 Meinst du vielleicht …?</b> <span class="muted">Diese Schnitte gibt es schon:</span>
     ${list.map(({ e, score }) => `<div class="duprow"><div style="flex:1"><b>${esc(e.title)}</b> <span class="badge ${EDIT_CLS[e.status] || ''}">${esc(e.status)}</span>${score >= 0.75 ? ' <span class="badge new">sehr ähnlich</span>' : ''}<div class="sub">${e.staffId ? '✂️ ' + esc((staffById(e.staffId) || {}).name || '') + ' · ' : ''}Abgabe ${deadlineTxt(e)} · ${esc(e.redaktion || reqBy(e))}${isActiveEdit(e) ? ` · ${e.progress || 0}%` : ''}</div></div><button class="btn small primary" data-dup="${e.id}">Ja, genau das</button></div>`).join('')}
-    <div class="sub" style="margin-top:6px">Nichts davon? Einfach weiter ausfüllen und neu anfragen.</div>`;
+    <div class="sub" style="margin-top:8px">Nichts davon? Einfach weiter ausfüllen und neu anfragen.</div>`;
 }
 /* „Brauche ich auch“: an bestehenden Schnitt anhängen statt neu anzufragen */
 function joinEditDialog(id) {
@@ -2967,8 +2986,8 @@ function joinEditDialog(id) {
   const already = (e.watchers || []).includes(me.id) || e.createdBy === me.id;
   const m = showModal(`✋ Bestehender Schnitt: ${esc(e.title)}`, `<div class="okbox">Prima – dann wird nichts doppelt angefragt.</div>
     <table class="mvtab"><tr><td class="muted">Status</td><td><span class="badge ${EDIT_CLS[e.status] || ''}">${esc(e.status)}</span> ${isActiveEdit(e) ? (e.progress || 0) + '%' : ''}</td></tr><tr><td class="muted">Cutter</td><td>${e.staffId ? esc((staffById(e.staffId) || {}).name || '') + (e.workDate ? ' · ' + fmtShort(e.workDate) : '') : 'noch nicht zugeteilt'}</td></tr><tr><td class="muted">Abgabe</td><td>${deadlineTxt(e)}</td></tr><tr><td class="muted">Redaktion</td><td>${esc(e.redaktion || reqBy(e))}</td></tr>${b ? `<tr><td class="muted">Produktion</td><td>${esc(b.title)} · ${fmtShort(b.date)}</td></tr>` : ''}${e.output ? `<tr><td class="muted">Ausspielung</td><td>${esc(e.output)}</td></tr>` : ''}${e.materialPath ? `<tr><td class="muted">Material</td><td>${esc(e.materialPath)}</td></tr>` : ''}</table>
-    ${already ? '<div class="infobox" style="margin-top:12px">Du bekommst bereits Updates zu diesem Schnitt.</div>' : ''}
-    <label class="muted" style="font-size:12px;display:block;margin-top:12px">Zusätzlicher Wunsch an diesen Schnitt (optional, z. B. „brauchen zusätzlich eine 9:16-Version“)</label><textarea class="input" id="joinNote" rows="3" style="margin-top:4px"></textarea>`,
+    ${already ? '<div class="infobox" style="margin-top:16px">Du bekommst bereits Updates zu diesem Schnitt.</div>' : ''}
+    <label class="muted" style="font-size:0.75rem;display:block;margin-top:16px">Zusätzlicher Wunsch an diesen Schnitt (optional, z. B. „brauchen zusätzlich eine 9:16-Version“)</label><textarea class="input" id="joinNote" rows="3" style="margin-top:4px"></textarea>`,
     `<button class="btn" data-m="close">Schließen</button><button class="btn primary" id="joinGo">${already ? 'Wunsch senden' : '✋ Brauche ich auch – Updates bekommen'}</button>`, 'small');
   $('#joinGo', m).addEventListener('click', () => {
     const note = $('#joinNote', m).value.trim(); const fresh = db.edits.find(x => x.id === id);
@@ -2986,7 +3005,7 @@ function newEditReq(pre = {}) {
     title: '✂️ Schnitt anfragen', only: EDIT_REQ_FIELDS, saveLabel: '📨 Anfrage senden',
     info: 'Beschreibe kurz das Thema. Während du tippst, prüft das Tool, ob es den Schnitt schon gibt („Meinst du vielleicht …?“) – dann einfach dort anhängen statt doppelt anzufragen.',
     beforeSave: (r, isNew) => { if (isNew) { r.status = 'Angefragt'; r.progress = 0; r.redaktion = r.redaktion || (me.team && me.team !== '–' ? me.team : me.name); r.source = r.bookingId ? postSourceFor(db.bookings.find(x => x.id === r.bookingId) || {}) : 'Sonstiges'; if (r.estHours === '' || r.estHours == null) r.estHours = 2; } },
-    afterSave: (r, isNew) => { if (isNew) toast('📨 Schnitt-Anfrage gesendet – die Produktion sieht sie im Schnitt-Board.', 'ok'); },
+    afterSave: (r, isNew) => { if (isNew) reqToast('Schnitt-Anfrage gesendet – die Produktion sieht sie im Schnitt-Board.', 'edits', r.id); },
   });
 }
 function editReqOpts(rec) {
@@ -3003,7 +3022,7 @@ function rejectEdit(id) {
   const e = db.edits.find(x => x.id === id); if (!e) return;
   const dups = similarEdits({ ...e }).filter(x => x.e.id !== e.id);
   const quick = [...(dups[0] ? [`Gibt es schon: „${dups[0].e.title}“ – bitte dort anhängen.`] : []), 'Heute keine Kapazität – geht morgen?', 'Bitte kurz telefonisch abstimmen.'];
-  const m = showModal(`✕ Schnitt-Anfrage ablehnen: ${esc(e.title)}`, `<div class="infobox">von ${esc(reqBy(e))} · Abgabe ${deadlineTxt(e)}</div><label class="muted" style="font-size:12px">Kurze Begründung / Alternative</label><textarea class="input" id="rejNote" rows="3" style="margin-top:4px"></textarea><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${quick.map(q => `<span class="chip" data-q="${esc(q)}">${esc(q)}</span>`).join('')}</div>${dups[0] ? `<label class="toggle" style="margin-top:10px"><input type="checkbox" id="rejMerge" checked> Anfragende*n bei „${esc(dups[0].e.title)}“ für Updates eintragen</label>` : ''}`,
+  const m = showModal(`✕ Schnitt-Anfrage ablehnen: ${esc(e.title)}`, `<div class="infobox">von ${esc(reqBy(e))} · Abgabe ${deadlineTxt(e)}</div><label class="muted" style="font-size:0.75rem">Kurze Begründung / Alternative</label><textarea class="input" id="rejNote" rows="3" style="margin-top:4px"></textarea><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${quick.map(q => `<span class="chip" data-q="${esc(q)}">${esc(q)}</span>`).join('')}</div>${dups[0] ? `<label class="toggle" style="margin-top:8px"><input type="checkbox" id="rejMerge" checked> Anfragende*n bei „${esc(dups[0].e.title)}“ für Updates eintragen</label>` : ''}`,
     '<button class="btn" data-m="close">Abbrechen</button><button class="btn danger" id="rejGo">Ablehnen</button>', 'small');
   m.addEventListener('click', ev => { const q = ev.target.closest('[data-q]'); if (q) $('#rejNote', m).value = q.dataset.q; });
   $('#rejGo', m).addEventListener('click', () => {
@@ -3023,17 +3042,17 @@ function redCutters(D) {
   html += `<div class="grid">${on.map(({ p, sh }) => {
     const jobs = db.edits.filter(e => e.staffId === p.id && isActiveEdit(e) && editOnDay(e, D)).sort((a, b) => (a.deadline || '').localeCompare(b.deadline || ''));
     const free = freeOn(p.id, D);
-    return `<div class="card"><h3>${shiftChip(sh.code)} ${esc(p.name)} <span class="muted" style="font-weight:400;font-size:12px">${shiftRangeOf(sh)}</span><span class="badge ${free >= 2 ? 'ok' : free > 0 ? 'warn' : 'bad'}">${free > 0 ? fmtH(free) + ' frei' : 'ausgelastet'}</span></h3>${loadBar(loadOn(p.id, D), postHours())}
+    return `<div class="card"><h3>${shiftChip(sh.code)} ${esc(p.name)} <span class="muted" style="font-weight:400;font-size:0.75rem">${shiftRangeOf(sh)}</span><span class="badge ${free >= 2 ? 'ok' : free > 0 ? 'warn' : 'bad'}">${free > 0 ? fmtH(free) + ' frei' : 'ausgelastet'}</span></h3>${loadBar(loadOn(p.id, D), postHours())}
       ${jobs.map(e => `<div class="list-row" data-act="open" data-coll="edits" data-id="${e.id}"><div style="flex:1"><div><b>${esc(e.title)}</b>${newCell(e)}</div><div class="sub">${esc(e.redaktion || '')} · Abgabe <span class="${deadlineCls(e)}">${deadlineTxt(e)}</span> · <span class="badge ${EDIT_CLS[e.status] || ''}">${esc(e.status)}</span></div><div class="prog" style="margin-top:4px"><i style="width:${e.progress || 0}%"></i></div></div></div>`).join('') || '<div class="empty">Noch nichts zugeteilt – Kapazität frei.</div>'}</div>`;
   }).join('') || '<div class="card"><div class="empty">An diesem Tag ist kein Cutter eingeplant.</div></div>'}
     <div class="card"><h3>📥 Warteschlange (noch nicht zugeteilt) <span class="badge">${queue.length}</span></h3>${queue.map(e => `<div class="list-row" data-act="open" data-coll="edits" data-id="${e.id}"><div style="flex:1"><div>${esc(e.title)}</div><div class="sub">${esc(e.redaktion || reqBy(e))} · Abgabe ${deadlineTxt(e)} · <span class="badge ${EDIT_CLS[e.status] || ''}">${esc(e.status)}</span></div></div></div>`).join('') || '<div class="empty">Leer.</div>'}</div></div>
-    ${off.length ? `<div class="muted" style="font-size:12px;margin-top:10px">Nicht im Dienst: ${off.map(p => esc(p.name)).join(', ')}</div>` : ''}`;
+    ${off.length ? `<div class="muted" style="font-size:0.75rem;margin-top:8px">Nicht im Dienst: ${off.map(p => esc(p.name)).join(', ')}</div>` : ''}`;
   return html;
 }
 function redTopics() {
   const q = (state.f.topicQ || '').toLowerCase();
   const rows = db.edits.filter(e => isActiveEdit(e) && (!q || `${e.title} ${e.redaktion || ''} ${(db.bookings.find(b => b.id === e.bookingId) || {}).title || ''}`.toLowerCase().includes(q))).sort((a, b) => (a.deadline || '9').localeCompare(b.deadline || '9'));
-  return `<div class="toolbar"><input class="input" data-filter="topicQ" value="${esc(state.f.topicQ || '')}" placeholder="🔎 Thema suchen, z. B. „Midterms“ …" style="width:320px"><span class="muted" style="font-size:12px">${rows.length} laufende Schnitte</span></div>
+  return `<div class="toolbar"><input class="input" data-filter="topicQ" value="${esc(state.f.topicQ || '')}" placeholder="🔎 Thema suchen, z. B. „Midterms“ …" style="width:320px"><span class="muted" style="font-size:0.75rem">${rows.length} laufende Schnitte</span></div>
   <div class="table-wrap"><table class="t" style="min-width:760px"><thead><tr><th>Thema</th><th>Status</th><th>Fortschritt</th><th>Cutter</th><th>Abgabe</th><th>Redaktion</th><th></th></tr></thead><tbody>
   ${rows.map(e => `<tr class="row ${newState(e) ? 'is-new' : ''}" data-act="open" data-coll="edits" data-id="${e.id}"><td><b>${esc(e.title)}</b>${(e.watchers || []).length ? ` <span class="muted">✋${e.watchers.length}</span>` : ''}</td><td><span class="badge ${EDIT_CLS[e.status] || ''}">${esc(e.status)}</span></td><td style="min-width:90px"><div class="prog"><i style="width:${e.progress || 0}%"></i></div></td><td>${e.staffId ? esc((staffById(e.staffId) || {}).name || '') : '<span class="muted">noch offen</span>'}</td><td class="${deadlineCls(e)}">${deadlineTxt(e)}</td><td>${esc(e.redaktion || reqBy(e))}</td><td>${e.createdBy === me.id || (e.watchers || []).includes(me.id) ? '<span class="muted">✓ du bist dabei</span>' : `<button class="btn small" data-act="joinEdit" data-id="${e.id}">✋ Brauche ich auch</button>`}</td></tr>`).join('') || `<tr><td colspan="7" class="empty">Kein laufender Schnitt passt zu „${esc(q)}“. <button class="btn small primary" data-act="newEditReq" data-title="${esc(state.f.topicQ || '')}">✂️ Jetzt anfragen</button></td></tr>`}
   </tbody></table></div>`;
@@ -3054,7 +3073,7 @@ Object.assign(ACTIONS, {
 /* =========================================================================
    v0.10: Streaming-Signalweg – SRT-Decoder/Ports → CUBA (FREE / PLUS)
    ========================================================================= */
-const STREAM_TABS = () => [['list', 'Liste'], ['cal', 'Kalender']];
+const STREAM_TABS = () => [['list', 'Liste'], ...((can.edit() || canBusinessStream()) ? [['grid', '⌨ Tabelle']] : []), ['cal', 'Kalender']];
 function streamSections() {
   const a = [];
   if (canAds()) a.push(['ads', `📣 Werbung${adNeedsAction().length ? ` (${adNeedsAction().length})` : ''}`]);
@@ -3198,7 +3217,7 @@ function providerText({ streamId, provider, lang = 'de' }) {
 }
 function providerInfoDialog(o) {
   let lang = 'de';
-  const m = showModal('📋 Info an Dienstleister', `<div class="toolbar"><div class="tabs"><div class="tab active" data-lang="de">Deutsch</div><div class="tab" data-lang="en">English</div></div><span class="muted" style="font-size:12px">Prüfen, ggf. anpassen, kopieren.</span></div><textarea class="input" id="provText" rows="18" style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px"></textarea>`,
+  const m = showModal('📋 Info an Dienstleister', `<div class="toolbar"><div class="tabs"><div class="tab active" data-lang="de">Deutsch</div><div class="tab" data-lang="en">English</div></div><span class="muted" style="font-size:0.75rem">Prüfen, ggf. anpassen, kopieren.</span></div><textarea class="input" id="provText" rows="18" style="font-family:ui-monospace,Menlo,monospace;font-size:0.875rem"></textarea>`,
     '<button class="btn" data-m="close">Schließen</button><button class="btn primary" id="provCopy">📋 Kopieren</button>');
   const fill = () => { $('#provText', m).value = providerText({ ...o, lang }); };
   fill();
@@ -3210,7 +3229,7 @@ function routeView() {
   const D = state.date.streams, T = today();
   const dayStreams = db.streams.filter(s => s.kind !== 'Hinweistag' && (s.date === D || (s.date === addDays(D, -1) && s.start && s.end && tmin(s.end) <= tmin(s.start)))).sort(byDate);
   const hint = db.streams.filter(s => s.kind === 'Hinweistag' && s.date === D);
-  let html = `<div class="toolbar">${tabsHtml('streams', STREAM_TABS())}${streamMenuHtml()}${dateNav('streams', `${WDL[parseISO(D).getDay()]}, ${fmtDate(D)}`, 'day')}<span class="spacer"></span><span class="muted" style="font-size:12px">Zeiten in ${tzLabel(D)}</span>${newBtn('newStream', '+ Event')}</div>`;
+  let html = `<div class="toolbar">${tabsHtml('streams', STREAM_TABS())}${streamMenuHtml()}${dateNav('streams', `${WDL[parseISO(D).getDay()]}, ${fmtDate(D)}`, 'day')}<span class="spacer"></span><span class="muted" style="font-size:0.75rem">Zeiten in ${tzLabel(D)}</span>${newBtn('newStream', '+ Event')}</div>`;
   html += hint.map(h => `<div class="warnbox">⚠️ <b>${esc(h.name)}</b> ${esc(h.notes || '')}</div>`).join('');
   html += `<div class="vpgrid">${dayStreams.map(st => vpCard(st, D)).join('') || '<div class="card"><div class="empty">An diesem Tag sind keine Streams geplant.</div></div>'}</div>`;
   html += studioLiveCards(D);
@@ -3221,7 +3240,7 @@ function routeView() {
   let tl = stripScale(from, to);
   (db.srtPorts || []).slice().sort((a, b) => a.dec - b.dec || a.ch - b.ch).forEach(p => { tl += row(`${portShort(p)} :${p.port}`, esc(p.ip), portSegs(p.id, d0, from, to), '#93c5fd'); });
   (db.cubas || []).forEach(c => { tl += row(`${esc(c.name)} <span class="rchip cuba ${c.mode === 'PLUS' ? 'plus' : 'free'}">${c.mode}</span>`, esc(c.ott), cubaSegs(c.id, d0, from, to), c.mode === 'PLUS' ? '#fcd34d' : '#86efac'); });
-  html += `<h3 style="margin:22px 0 8px;font-size:14px">Belegung ${fmtShort(D)} · Ports (schraffiert = ${srtLead()} Min. Leitungstest) & CUBA</h3><div class="strips">${tl}</div>`;
+  html += `<h3 style="margin:24px 0 8px;font-size:1rem">Belegung ${fmtShort(D)} · Ports (schraffiert = ${srtLead()} Min. Leitungstest) & CUBA</h3><div class="strips">${tl}</div>`;
   return html;
 }
 /* ---------- Ansicht: Ports & CUBA ---------- */
@@ -3229,13 +3248,13 @@ function infraView() {
   const T = today(), I = db.infra || {};
   const nextUse = (match) => db.streams.filter(s => isEvent(s) && s.date >= T && match(s)).sort(byDate)[0];
   let html = `<div class="toolbar">${tabsHtml('streams', STREAM_TABS())}${streamMenuHtml()}<span class="spacer"></span></div>`;
-  html += `<div class="side-split"><div><div class="card" style="margin-bottom:14px"><h3>📥 SRT-Decoder · Port-Vergabe</h3><div class="table-wrap"><table class="t" style="min-width:720px"><thead><tr><th>Kürzel</th><th>Decoder</th><th>IP</th><th>Port</th><th>Passwort</th><th>Heute</th><th>Nächste Nutzung</th></tr></thead><tbody>
+  html += `<div class="side-split"><div><div class="card" style="margin-bottom:16px"><h3>📥 SRT-Decoder · Port-Vergabe</h3><div class="table-wrap"><table class="t" style="min-width:720px"><thead><tr><th>Kürzel</th><th>Decoder</th><th>IP</th><th>Port</th><th>Passwort</th><th>Heute</th><th>Nächste Nutzung</th></tr></thead><tbody>
     ${(db.srtPorts || []).slice().sort((a, b) => a.dec - b.dec || a.ch - b.ch).map((p, i, arr) => { const n = nextUse(s => isSrtFeed(s.feed) && [s.srtMain, s.srtBackup].includes(p.id)); const grpBreak = i && arr[i - 1].dec !== p.dec; return `<tr class="row ${newState(p) ? 'is-new' : ''}" data-act="open" data-coll="srtPorts" data-id="${p.id}" ${grpBreak ? 'style="border-top:2px solid var(--line)"' : ''}><td><span class="rchip srt">${portShort(p)}</span>${newCell(p)}</td><td>${esc(p.decoder)}</td><td style="font-family:ui-monospace,Menlo,monospace">${esc(p.ip)}</td><td style="font-family:ui-monospace,Menlo,monospace"><b>${esc(p.port)}</b></td><td>${p.password ? '🔒 hinterlegt' : '<span class="hint-red">fehlt</span>'}</td><td>${portUses().filter(u => u.portIds.includes(p.id) && u.date === T).map(u => `${u.kind === 'Test' ? '🧪 ' : ''}${esc(u.start)} ${esc(u.name)}`).join('<br>') || '<span class="muted">frei</span>'}</td><td>${n ? `${fmtShort(n.date)} ${n.start || ''} · ${esc(n.name)}` : '<span class="muted">–</span>'}</td></tr>`; }).join('')}
-    </tbody></table></div><div class="muted" style="font-size:12px;margin-top:6px">Zeile anklicken, um das Passwort zu hinterlegen oder IP/Port zu ändern. Vergeben wird pro Event direkt im Stream (DEC-Kacheln) – frei ist, was zur Event- bzw. Testzeit nicht belegt ist.</div></div>
+    </tbody></table></div><div class="muted" style="font-size:0.75rem;margin-top:8px">Zeile anklicken, um das Passwort zu hinterlegen oder IP/Port zu ändern. Vergeben wird pro Event direkt im Stream (DEC-Kacheln) – frei ist, was zur Event- bzw. Testzeit nicht belegt ist.</div></div>
     <div class="card"><h3>📤 CUBA · Ausspielung</h3><div class="table-wrap"><table class="t" style="min-width:620px"><thead><tr><th>CUBA</th><th>OTT-Ausgang</th><th>Standard</th><th>Heute</th><th>Nächste Nutzung</th></tr></thead><tbody>
     ${(db.cubas || []).map(c => { const us = cubaUses().filter(u => u.cubaId === c.id && u.date >= T).sort(byDate); const lbl = u => (u.kind === 'booking' ? '🎬 ' : '') + u.name; const n = us[0] ? { date: us[0].date, start: us[0].start, name: lbl(us[0]) } : null; const tdy = us.filter(u => u.date === T).map(u => ({ start: u.start, name: lbl(u) })); return `<tr><td><b>${esc(c.name)}</b></td><td>${can.edit() ? `<input class="input" data-cuba="ott" data-id="${c.id}" value="${esc(c.ott)}" style="width:200px">` : esc(c.ott)}</td><td>${can.edit() ? `<select class="input" data-cuba="mode" data-id="${c.id}"><option ${c.mode === 'FREE' ? 'selected' : ''}>FREE</option><option ${c.mode === 'PLUS' ? 'selected' : ''}>PLUS</option></select>` : `<span class="rchip cuba ${c.mode === 'PLUS' ? 'plus' : 'free'}">${c.mode}</span>`}</td><td>${tdy.map(s => `${s.start || ''} ${esc(s.name)}`).join('<br>') || '<span class="muted">frei</span>'}</td><td>${n ? `${fmtShort(n.date)} ${n.start || ''} · ${esc(n.name)}` : '<span class="muted">–</span>'}</td></tr>`; }).join('')}
-    </tbody></table></div><div class="muted" style="font-size:12px;margin-top:6px">„Standard“ = übliche Einstellung. FREE/PLUS wird weiterhin im Paywall-Tool geschaltet – die App warnt, wenn ein Stream nicht zur Standard-Einstellung passt.</div></div></div>
-    <div><div class="card"><h3>⚙️ SRT-Konfiguration</h3>${[['h264', 'H.264'], ['h265', 'H.265'], ['bitrate', 'Bitrate'], ['audioBw', 'Audio-Bandbreite'], ['sampleRate', 'Sample Rate'], ['codec', 'Audio-Codec'], ['lead', 'Ports reservieren vor Sendebeginn (Min.)']].map(([k, l]) => `<div class="form" style="grid-template-columns:1fr;margin-bottom:8px"><div class="f"><label>${l}</label>${can.edit() ? `<input class="input" data-infra="${k}" value="${esc(I[k] ?? '')}" >` : `<div>${esc(I[k] ?? '')}</div>`}</div></div>`).join('')}<div class="muted" style="font-size:12px">Wird 1:1 in den SRT-Text übernommen. Passwörter je Port in der Tabelle links. Hinweis: Im Prototyp liegen Passwörter lokal im Browser – im Echtbetrieb gehören sie in einen geschützten Bereich.</div></div></div></div>`;
+    </tbody></table></div><div class="muted" style="font-size:0.75rem;margin-top:8px">„Standard“ = übliche Einstellung. FREE/PLUS wird weiterhin im Paywall-Tool geschaltet – die App warnt, wenn ein Stream nicht zur Standard-Einstellung passt.</div></div></div>
+    <div><div class="card"><h3>⚙️ SRT-Konfiguration</h3>${[['h264', 'H.264'], ['h265', 'H.265'], ['bitrate', 'Bitrate'], ['audioBw', 'Audio-Bandbreite'], ['sampleRate', 'Sample Rate'], ['codec', 'Audio-Codec'], ['lead', 'Ports reservieren vor Sendebeginn (Min.)']].map(([k, l]) => `<div class="form" style="grid-template-columns:1fr;margin-bottom:8px"><div class="f"><label>${l}</label>${can.edit() ? `<input class="input" data-infra="${k}" value="${esc(I[k] ?? '')}" >` : `<div>${esc(I[k] ?? '')}</div>`}</div></div>`).join('')}<div class="muted" style="font-size:0.75rem">Wird 1:1 in den SRT-Text übernommen. Passwörter je Port in der Tabelle links. Hinweis: Im Prototyp liegen Passwörter lokal im Browser – im Echtbetrieb gehören sie in einen geschützten Bereich.</div></div></div></div>`;
   return html;
 }
 Object.assign(ACTIONS, {
@@ -3331,7 +3350,7 @@ function renderCubaPick(form, cur, isBooking) {
       <div class="ct-st">${noTime ? '<span class="muted">erst Zeit eintragen</span>' : busy ? `⛔ belegt<br><small>${esc(cl[0].name)} · ${esc(cl[0].start || '')}${cl[0].end ? '–' + esc(cl[0].end) : ''}</small>` : '✅ frei'}</div>
       ${!busy && !noTime && !match ? `<div class="ct-hint">steht auf ${c.mode} → für ${want} umschalten</div>` : ''}
       ${sel ? '<div class="ct-badge">✔ gewählt</div>' : sug && sug.id === c.id ? '<div class="ct-badge sug">Empfehlung</div>' : ''}
-    </div>`; }).join('')}</div><div class="muted" style="font-size:12px;margin-top:6px">✅ frei · ⛔ zu dieser Zeit schon belegt (Stream oder Studio-Live). ${ro ? '' : 'Kachel antippen zum Auswählen.'}</div>`;
+    </div>`; }).join('')}</div><div class="muted" style="font-size:0.75rem;margin-top:8px">✅ frei · ⛔ zu dieser Zeit schon belegt (Stream oder Studio-Live). ${ro ? '' : 'Kachel antippen zum Auswählen.'}</div>`;
 }
 /* CUBA-Belegung des Tages – kompakt über dem Studio-Tagesplan */
 function cubaDayBar(D) {
@@ -3349,10 +3368,10 @@ function cubaSegs(cid, d0, from, to) {
 function studioLiveCards(D) {
   const list = db.bookings.filter(b => b.live && !isBlock(b.type) && b.status !== 'Abgesagt' && b.date === D).sort(byDate);
   if (!list.length) return '';
-  return `<h3 style="margin:22px 0 8px;font-size:14px">🎬 Live aus dem Studio</h3><div class="rgrid">${list.map(b => {
+  return `<h3 style="margin:24px 0 8px;font-size:1rem">🎬 Live aus dem Studio</h3><div class="rgrid">${list.map(b => {
     const c = cubaById(b.cubaId), st = studioById(b.studioId), want = (b.liveAccess || 'Free') === 'Plus' ? 'PLUS' : 'FREE', cl = c ? cubaClashes(b, c.id, true) : [];
     return `<div class="rcard ${newState(b) ? 'is-new' : ''}" data-act="open" data-coll="bookings" data-id="${b.id}"><div class="rc-top"><div class="rc-time">${esc(b.allDay ? '––' : b.start)}<small>–${esc(b.end || '')}</small></div><div style="flex:1;min-width:0"><b>🔴 ${esc(b.title)}</b>${newCell(b)}<div class="sub">${esc(b.liveAccess || 'Free')}${b.streamId ? ' · mit Stream verknüpft' : ''}</div></div></div>
-      <div class="rb-flow small"><div class="rb-node"><small>Studio</small><b><i class="sw" style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${st.color}"></i> ${esc(st.name)}</b><span>${isVmix(b) ? 'eigener Vmix-Rechner' : 'aus der Studio-Regie'} → direkt auf die CUBA</span></div><div class="rb-arrow">→</div>
+      <div class="rb-flow small"><div class="rb-node"><small>Studio</small><b><i class="sw" style="display:inline-block;width:9px;height:9px;border-radius:4px;background:${st.color}"></i> ${esc(st.name)}</b><span>${isVmix(b) ? 'eigener Vmix-Rechner' : 'aus der Studio-Regie'} → direkt auf die CUBA</span></div><div class="rb-arrow">→</div>
       <div class="rb-node big ${c ? (c.mode === 'PLUS' ? 'plus' : 'free') : 'missing'}"><small>schicken an</small>${c ? `<b>${esc(c.name)} · ${c.mode}</b><span>${esc(c.ott)}</span>` : '<b>CUBA offen</b>'}</div></div>
       ${c && c.mode !== want ? `<div class="rb-note">⚠️ ${esc(c.name)} steht auf ${c.mode} – Sendung ist ${want}: im Paywall-Tool umschalten.</div>` : ''}${cl.length ? `<div class="rb-note bad">⚠️ ${esc(c.name)} gleichzeitig belegt durch „${esc(cl[0].name)}“.</div>` : ''}</div>`; }).join('')}</div>`;
 }
@@ -3378,9 +3397,9 @@ function postQuickDialog(bookingId, onDone) {
   const drawCutters = () => {
     const on = cutters().map(p => ({ p, sh: shiftOf(p.id, workDate), free: Math.max(0, capOn(p.id, workDate) - loadOn(p.id, workDate, e.id)) }));
     const list = on.filter(x => x.sh).sort((a, b2) => b2.free - a.free), off = on.filter(x => !x.sh);
-    $('#pqCut', m).innerHTML = `${list.map(x => `<button type="button" class="pq-card ${staffId === x.p.id ? 'sel' : ''} ${x.free >= (+e.estHours || 0) ? 'ok' : x.free > 0 ? 'mid' : 'full'}" data-pqs="${x.p.id}"><span>${shiftChip(x.sh.code)} <b>${esc(x.p.name)}</b></span><small>${fmtH(x.free)} frei</small></button>`).join('') || '<div class="muted" style="font-size:13px">An diesem Tag ist kein Cutter im Dienst.</div>'}
+    $('#pqCut', m).innerHTML = `${list.map(x => `<button type="button" class="pq-card ${staffId === x.p.id ? 'sel' : ''} ${x.free >= (+e.estHours || 0) ? 'ok' : x.free > 0 ? 'mid' : 'full'}" data-pqs="${x.p.id}"><span>${shiftChip(x.sh.code)} <b>${esc(x.p.name)}</b></span><small>${fmtH(x.free)} frei</small></button>`).join('') || '<div class="muted" style="font-size:0.875rem">An diesem Tag ist kein Cutter im Dienst.</div>'}
       <button type="button" class="pq-card none ${!staffId ? 'sel' : ''}" data-pqs=""><span><b>Noch offen</b></span><small>später verteilen</small></button>
-      ${off.length ? `<div class="muted" style="font-size:11.5px;width:100%">Nicht im Dienst: ${off.map(x => esc(x.p.name)).join(', ')}</div>` : ''}`;
+      ${off.length ? `<div class="muted" style="font-size:0.75rem;width:100%">Nicht im Dienst: ${off.map(x => esc(x.p.name)).join(', ')}</div>` : ''}`;
   };
   drawCutters();
   m.addEventListener('click', ev => {
@@ -3447,7 +3466,7 @@ function renderDecPick(form, cur) {
   const r = { ...cur, id: form.dataset.recid || cur.id };
   const noTime = !r.start;
   const decs = [...new Set((db.srtPorts || []).map(p => p.dec))].sort();
-  box.innerHTML = `${noTime ? '<div class="muted" style="font-size:12px;margin-bottom:6px">Tipp: erst Startzeit eintragen – dann zeigt die Ampel, was frei ist.</div>' : ''}${decs.map(d => `<div class="dec-row"><div class="dec-lbl">Decoder ${d}</div>${(db.srtPorts || []).filter(p => p.dec === d).sort((a, b) => a.ch - b.ch).map(p => {
+  box.innerHTML = `${noTime ? '<div class="muted" style="font-size:0.75rem;margin-bottom:8px">Tipp: erst Startzeit eintragen – dann zeigt die Ampel, was frei ist.</div>' : ''}${decs.map(d => `<div class="dec-row"><div class="dec-lbl">Decoder ${d}</div>${(db.srtPorts || []).filter(p => p.dec === d).sort((a, b) => a.ch - b.ch).map(p => {
     const busy = noTime ? [] : portBusy(r, p.id), role = hm.value === p.id ? 'Haupt' : hb.value === p.id ? 'Backup' : '';
     return `<div class="dtile ${busy.length ? 'busy' : 'ok'} ${role ? 'sel' : ''} ${ro ? 'ro' : ''}" data-decval="${p.id}" title="${esc(p.ip + ':' + p.port)}"><b>${portShort(p)}</b><small>${esc(p.ip)}:${p.port}</small><span>${noTime ? '' : busy.length ? `⛔ ${esc(busy[0].kind)}: ${esc(busy[0].name)}` : '✅ frei'}</span>${role ? `<i class="dt-role">${role}</i>` : ''}</div>`; }).join('')}</div>`).join('')}${ro ? '' : '<div class="toolbar" style="margin:8px 0 0"><button type="button" class="btn small" data-decauto="1">⚡ Automatisch: je ein freier DEC aus Decoder 1 + 2</button></div>'}`;
 }
@@ -3458,7 +3477,7 @@ function testRow(t) {
 function testsEditor(v, ro) {
   const list = (v || []).slice().sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
   if (ro) return list.length ? `<div class="t-ro">${list.map(t => `<div>🧪 ${fmtShort(t.date)} ${esc(t.start)}–${esc(t.end || '')} ${esc(t.note || '')}</div>`).join('')}</div>` : '<div class="muted">Keine Tests geplant.</div>';
-  return `<div class="t-ed" data-tests="1">${list.map(testRow).join('')}<div class="toolbar" style="margin:6px 0 0"><button type="button" class="btn small" data-testadd="prev">+ Test Vortag 15:00</button><button type="button" class="btn small" data-testadd="day">+ Test am Sendetag (60 Min. vorher)</button><button type="button" class="btn small" data-testadd="free">+ Testtermin</button></div></div>`;
+  return `<div class="t-ed" data-tests="1">${list.map(testRow).join('')}<div class="toolbar" style="margin:8px 0 0"><button type="button" class="btn small" data-testadd="prev">+ Test Vortag 15:00</button><button type="button" class="btn small" data-testadd="day">+ Test am Sendetag (60 Min. vorher)</button><button type="button" class="btn small" data-testadd="free">+ Testtermin</button></div></div>`;
 }
 function readTests(root) {
   return $$('.t-row', root).map(r => { const g = k => ($(`[data-tf="${k}"]`, r) || {}).value || ''; let att = []; try { att = JSON.parse(r.dataset.att || '[]'); } catch (e) { } return { id: r.dataset.tid, date: g('date'), start: g('start'), end: g('end'), note: g('note'), att }; }).filter(t => t.date && t.start);
@@ -3498,8 +3517,8 @@ function testsCard() {
 function testsView() {
   const list = upcomingTests();
   const days = [...new Set(list.map(t => t.date))];
-  return `<div class="toolbar">${tabsHtml('streams', STREAM_TABS())}${streamMenuHtml()}<span class="spacer"></span><span class="muted" style="font-size:12px">Testtermine werden im jeweiligen Event angelegt.</span></div>
-    ${days.map(d => `<div class="card" style="margin-bottom:10px"><h3>${WDL[parseISO(d).getDay()]}, ${fmtDate(d)}${d === today() ? ' · Heute' : ''} <span class="badge">${list.filter(t => t.date === d).length}</span></h3>${list.filter(t => t.date === d).map(testItemHtml).join('')}</div>`).join('') || '<div class="card"><div class="empty">Keine anstehenden Tests.</div></div>'}`;
+  return `<div class="toolbar">${tabsHtml('streams', STREAM_TABS())}${streamMenuHtml()}<span class="spacer"></span><span class="muted" style="font-size:0.75rem">Testtermine werden im jeweiligen Event angelegt.</span></div>
+    ${days.map(d => `<div class="card" style="margin-bottom:8px"><h3>${WDL[parseISO(d).getDay()]}, ${fmtDate(d)}${d === today() ? ' · Heute' : ''} <span class="badge">${list.filter(t => t.date === d).length}</span></h3>${list.filter(t => t.date === d).map(testItemHtml).join('')}</div>`).join('') || '<div class="card"><div class="empty">Keine anstehenden Tests.</div></div>'}`;
 }
 /* ---------- SRT-Text für den Dienstleister (DE/EN) ---------- */
 function srtTextParts(stId, lang, withDates) {
@@ -3524,8 +3543,8 @@ function srtTextDialog(stId, fresh) {
   let lang = /^(de|deutsch)/i.test(st.textLang || '') ? 'de' : (st.textLang || 'en');
   let withDates = (st.tests || []).length > 0;
   const m = showModal(`📋 SRT-Text · ${esc(st.name)}`, `${fresh ? '<div class="okbox">DEC zugeteilt – hier ist der Text für den Dienstleister.</div>' : ''}
-    <div class="toolbar"><div class="tabs"><div class="tab" data-lang="en">English</div><div class="tab" data-lang="de">Deutsch</div></div><label class="toggle" style="font-size:13px"><input type="checkbox" id="srtDates"> Sendezeit & Testtermine anhängen</label></div>
-    <div id="srtWarn"></div><div class="srt-preview" id="srtPrev"></div><textarea class="input" id="srtPlain" rows="14" style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;margin-top:10px"></textarea>`,
+    <div class="toolbar"><div class="tabs"><div class="tab" data-lang="en">English</div><div class="tab" data-lang="de">Deutsch</div></div><label class="toggle" style="font-size:0.875rem"><input type="checkbox" id="srtDates"> Sendezeit & Testtermine anhängen</label></div>
+    <div id="srtWarn"></div><div class="srt-preview" id="srtPrev"></div><textarea class="input" id="srtPlain" rows="14" style="font-family:ui-monospace,Menlo,monospace;font-size:0.875rem;margin-top:8px"></textarea>`,
     '<button class="btn" data-m="close">Schließen</button><button class="btn" id="srtCopyPlain">📋 Als Text kopieren</button><button class="btn primary" id="srtCopyRich">📋 Formatiert kopieren (Outlook / Teams)</button>');
   const fill = () => {
     const o = srtTextParts(stId, lang, withDates);
@@ -3587,7 +3606,7 @@ function techStatusInfo(form, cur) {
   if (cur.kind === 'Hinweistag') { el.className = 'hidden'; return; }
   const t = techStatus(cur);
   el.className = `techbox ${t.lvl}`;
-  el.innerHTML = `<b>${t.lvl === 'ok' ? '✅' : t.lvl === 'part' ? '⏳' : '○'} ${t.label}</b><div class="tb-items"><span>${t.sig ? '✅' : '⏳'} Signalweg geklärt</span><span>${t.out ? '✅' : '⏳'} Ausspielung festgelegt</span><span>${t.tests ? '✅' : '–'} Tests geplant</span></div><div class="muted" style="font-size:12px;margin-top:4px">Um die technischen Details kümmern sich Produktion und Video Producer. Bitte unten nur <b>Aufzeichnung & Replay</b> ausfüllen.</div>`;
+  el.innerHTML = `<b>${t.lvl === 'ok' ? '✅' : t.lvl === 'part' ? '⏳' : '○'} ${t.label}</b><div class="tb-items"><span>${t.sig ? '✅' : '⏳'} Signalweg geklärt</span><span>${t.out ? '✅' : '⏳'} Ausspielung festgelegt</span><span>${t.tests ? '✅' : '–'} Tests geplant</span></div><div class="muted" style="font-size:0.75rem;margin-top:4px">Um die technischen Details kümmern sich Produktion und Video Producer. Bitte unten nur <b>Aufzeichnung & Replay</b> ausfüllen.</div>`;
 }
 /* Video Producer: alles Technische auf einen Blick */
 function vpCard(st, D) {
@@ -3597,7 +3616,7 @@ function vpCard(st, D) {
   const tests = (st.tests || []).filter(t => t.date >= addDays(today(), -1)).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
   const kv = (k, v) => `<div class="vp-kv"><span>${k}</span><b>${v || '<span class="muted">–</span>'}</b></div>`;
   return `<div class="vpcard ${st.status === 'Findet nicht statt' ? 'cancel' : ''} ${newState(st) ? 'is-new' : ''}" data-act="open" data-coll="streams" data-id="${st.id}">
-    <div class="rc-top"><div class="rc-time">${esc(st.start || '--:--')}<small>–${esc(st.end || '')} ${tz}${st.date !== D ? ' (Vortag)' : ''}</small></div><div style="flex:1;min-width:0"><b style="font-size:15px">${esc(st.name)}</b>${newCell(st)}<div class="sub"><span class="badge ${STATUS_CLS[st.status]}">${esc(st.status)}</span> ${esc(st.provider || '')}</div></div><div>${playerChip('streams', st, true)}</div></div>
+    <div class="rc-top"><div class="rc-time">${esc(st.start || '--:--')}<small>–${esc(st.end || '')} ${tz}${st.date !== D ? ' (Vortag)' : ''}</small></div><div style="flex:1;min-width:0"><b style="font-size:1rem">${esc(st.name)}</b>${newCell(st)}<div class="sub"><span class="badge ${STATUS_CLS[st.status]}">${esc(st.status)}</span> ${esc(st.provider || '')}</div></div><div>${playerChip('streams', st, true)}</div></div>
     <div class="vp-steps">
       <div class="vp-step ${srt ? (pm ? '' : 'missing') : ''}"><div class="vp-n">1</div><div><small>Signal kommt an</small>${srt ? (pm ? `<b>${esc(portShort(pm))} · ${pm.ip}:${pm.port}</b>${pb ? `<span>Backup ${esc(portShort(pb))} · ${pb.ip}:${pb.port}</span>` : '<span class="muted">kein Backup</span>'}` : '<b>DEC noch offen</b>') : `<b>${esc(st.feed)}</b><span>${esc(st.feedNote || 'Details folgen')}</span>`}</div></div>
       <div class="vp-step ${c ? (c.mode === 'PLUS' ? 'plus' : 'free') : 'missing'}"><div class="vp-n">2</div><div><small>Weiterleiten auf</small>${c ? `<b class="vp-big">${esc(c.name)} · ${c.mode}</b><span>${esc(c.ott)}</span>` : '<b>CUBA noch offen</b>'}</div></div>
@@ -3616,15 +3635,15 @@ function vpCard(st, D) {
 const WIZ_TYPES = [['Kamera', '🎥', 'Vertraulich · Schreibtisch-Talk'], ['Produktion', '🎙', 'Interview · Außendreh'], ['Live-Stream', '📡', 'Externes Signal live (z. B. Reuters, dpa, AP)'], ['Maske', '💄', 'Maske für Gast / Talent'], ['Studio', '🎬', 'Studio buchen'], ['Studio + Maske', '🎬💄', 'Studio inkl. Maske'], ['Schnitt', '✂️', 'Beitrag schneiden lassen']];
 const wizSteps = t => t === 'Kamera' ? ['type', 'cam', 'sum'] : t === 'Produktion' ? ['type', 'prod', 'binden', 'sum'] : wizStepsA(t);
 const wizStepsA = t => t === 'Live-Stream' ? ['type', 'live', 'sum'] : wizSteps0(t);
-const wizSteps0 = t => t === 'Maske' ? ['type', 'when', 'who', 'sum'] : t === 'Studio' ? ['type', 'when', 'studio', 'sum'] : t === 'Studio + Maske' ? ['type', 'when', 'studio', 'who', 'sum'] : t === 'Schnitt' ? ['type', 'cut', 'sum'] : ['type'];
-const WIZ_LABEL = { cam: 'Wann & wo?', prod: 'Was & wann?', binden: 'Bauchbinden & Themen', live: 'Was & wann?',  type: 'Was?', when: 'Wann & wofür?', who: 'Wer?', studio: 'Welches Studio?', cut: 'Welcher Schnitt?', sum: 'Prüfen & senden' };
+const wizSteps0 = t => t === 'Maske' ? ['type', 'who', 'when', 'sum'] : t === 'Studio' ? ['type', 'when', 'studio', 'sum'] : t === 'Studio + Maske' ? ['type', 'when', 'studio', 'who', 'sum'] : t === 'Schnitt' ? ['type', 'cut', 'sum'] : ['type'];
+const WIZ_LABEL = { cam: 'Wann & wo?', prod: 'Was & wann?', binden: 'Bauchbinden & Themen', live: 'Was & wann?',  type: 'Was?', when: 'Wann & wofür?', mkwhen: 'Freies Zeitfenster', who: 'Wer?', studio: 'Welches Studio?', cut: 'Welcher Schnitt?', sum: 'Prüfen & senden' };
 const reqMailTo = () => (db.options && db.options.requestMail) || 'pm@bild.de';
 function wizTilesHtml() {
   return `<div class="wiz-start"><div class="ws-h">📨 Neue Anfrage – in wenigen Schritten</div><div class="ws-tiles">${WIZ_TYPES.map(([t, ic, l]) => `<button class="ws-tile" data-act="wiz" data-type="${esc(t)}"><span>${ic}</span><b>${esc(t)}</b><small>${esc(l)}</small></button>`).join('')}</div></div>`;
 }
 function reqWizard(pre = {}) {
   const T = today();
-  const w = { kind: '', place: '', contact: '', setupMinutes: 60, protagonists: 1, interviewers: 1, publishDate: '', binden: '', themen: '', sourceText: '', materialPath: '', genders: {}, source: 'Reuters', start: '', end: '', until: '', access: 'Free', recording: [], platforms: ['BILD'], type: pre.type || '', date: pre.date || addDays(T, 1), time: pre.time || '', dur: 60, production: pre.production || '', talent: '', gender: '', location: byUsage('requests', 'location', db.options.mkLocations)[0], studioId: pre.studioId || '', title: pre.title || '', deadline: addDays(T, 1), deadlineTime: '', priority: 'Normal', output: '', notes: '' };
+  const w = { kind: '', place: '', contact: '', setupMinutes: 60, protagonists: 1, interviewers: 1, publishDate: '', binden: '', themen: '', sourceText: '', materialPath: '', genders: {}, source: 'Reuters', start: '', end: '', until: '', access: 'Free', recording: [], platforms: ['BILD'], type: pre.type || '', date: pre.date || addDays(T, 1), time: pre.time || '', dur: 60, production: pre.production || '', talent: '', gender: '', location: (db.options.mkLocations || MK_LOCS).find(x => /7\.?\s*OG/i.test(x)) || MK_LOCS[0], studioId: pre.studioId || '', title: pre.title || '', deadline: addDays(T, 1), deadlineTime: '', mkStart: '', mkDur: '', priority: 'Normal', output: '', notes: '' };
   let step = w.type ? 1 : 0;
   const setKind = () => { w.kind = w.type === 'Kamera' ? 'Schreibtisch-Talk' : w.type === 'Produktion' ? 'Interview' : ''; if (w.type === 'Produktion' && w.dur === 60) w.dur = 120; };
   setKind();
@@ -3635,7 +3654,7 @@ function reqWizard(pre = {}) {
   const inp = (field, type, ph, list) => `<input class="input pq-big" type="${type}" data-w="${field}" value="${esc(w[field])}" ${ph ? `placeholder="${esc(ph)}"` : ''} ${list ? `list="wz-${field}"` : ''} ${type === 'time' ? 'step="300"' : ''}>${list ? `<datalist id="wz-${field}">${memory(list).slice(0, 200).map(x => `<option value="${esc(x)}">`).join('')}</datalist>` : ''}`;
   const notesPh = () => ({ Schnitt: 'z. B. Musik nur GEMA-frei, O-Töne ab Minute 3, Untertitel …', 'Live-Stream': 'z. B. Redner, Programmablauf, Link zur Ankündigung …', Kamera: 'z. B. Treffpunkt Pforte, Gast möchte nicht erkannt werden …', Produktion: 'z. B. Licht-Setup, zweite Kamera, B-Roll, Rückfahrt …', Studio: 'z. B. Aufbau, Deko, Zuspieler …' })[w.type] || 'z. B. Haare offen, Gast kommt erst 13:45 …';
   const endTime = () => w.time ? mint(tmin(w.time) + (+w.dur || 60)) : '';
-  const buildReq = () => ({ reqType: w.type, talent: w.talent || (w.type === 'Studio' ? 'Studio' : ''), gender: /Maske/.test(w.type) ? (w.genders[splitNames(w.talent)[0]] || w.gender) : '', people: /Maske/.test(w.type) ? splitNames(w.talent).map(n => ({ name: n, gender: w.genders[n] || '' })) : [], date: w.date, onAir: w.time, end: /Studio/.test(w.type) ? endTime() : '', production: w.production, studioId: /Studio/.test(w.type) ? w.studioId : '', location: /Maske/.test(w.type) ? w.location : '', notes: w.notes, status: 'Offen', custom: {} });
+  const buildReq = () => ({ reqType: w.type, talent: w.talent || (w.type === 'Studio' ? 'Studio' : ''), gender: /Maske/.test(w.type) ? (w.genders[splitNames(w.talent)[0]] || w.gender) : '', people: /Maske/.test(w.type) ? splitNames(w.talent).map(n => ({ name: n, gender: w.genders[n] || '' })) : [], date: w.date, onAir: w.type === 'Maske' ? (w.mkStart ? mint(tmin(w.mkStart) + mkNeed(w).len + mkCfg().buffer) : '') : w.time, mkStart: w.type === 'Maske' ? w.mkStart : '', mkDuration: w.type === 'Maske' && +w.mkDur ? +w.mkDur : '', end: /Studio/.test(w.type) ? endTime() : '', production: w.production, studioId: /Studio/.test(w.type) ? w.studioId : '', location: /Maske/.test(w.type) ? w.location : '', notes: w.notes, status: 'Offen', custom: {} });
   const buildEdit = () => ({ title: w.title, deadline: w.deadline, deadlineTime: w.deadlineTime, priority: w.priority, output: w.output, materialPath: w.materialPath.trim(), notes: w.notes, status: 'Angefragt', progress: 0, estHours: 2, source: 'Sonstiges', redaktion: me.team && me.team !== '–' ? me.team : me.name, custom: {} });
   const valid = key => {
     if (key === 'cam') return !w.date ? 'Bitte ein Datum wählen.' : !w.time ? 'Bitte den Beginn angeben.' : !w.title.trim() ? 'Bitte kurz das Thema / einen Arbeitstitel angeben.' : !w.place.trim() ? 'Bitte den Ort angeben.' : '';
@@ -3643,8 +3662,9 @@ function reqWizard(pre = {}) {
     if (key === 'live' && needsSrcText(w.source) && w.source !== 'Veranstalter-Stream' && !w.sourceText.trim()) return 'Bitte den Link oder eine Angabe zur Quelle eintragen.';
     if (key === 'live') return !w.title.trim() ? 'Bitte das Thema angeben.' : !w.date ? 'Bitte ein Datum wählen.' : !w.start ? 'Bitte die Startzeit angeben.' : '';
     if (key === 'type') return w.type ? '' : 'Bitte auswählen, was benötigt wird.';
+    if (key === 'mkwhen') return !w.date ? 'Bitte ein Datum wählen.' : !w.mkStart ? 'Bitte ein freies Zeitfenster bzw. eine Uhrzeit wählen.' : !w.production.trim() ? 'Bitte Sendung / Format angeben.' : '';
     if (key === 'when') return !w.date ? 'Bitte ein Datum wählen.' : !w.time ? 'Bitte den Sende- bzw. Drehbeginn angeben.' : !w.production.trim() ? 'Bitte Sendung / Format angeben.' : '';
-    if (key === 'who') { const ns = splitNames(w.talent), miss = ns.filter(n => !w.genders[n]); return !ns.length ? 'Bitte den Namen des Gastes angeben.' : miss.length ? `Bitte Herr / Dame wählen für: ${miss.join(', ')}` : ''; }
+    if (key === 'who') { const ns = splitNames(w.talent); return !ns.length ? 'Bitte den Namen des Gastes angeben.' : ''; }
     if (key === 'studio') return w.studioId ? '' : 'Bitte ein Studio wählen.';
     if (key === 'cut') return !w.title.trim() ? 'Bitte das Thema angeben.' : !w.deadline ? 'Bitte eine Abgabe wählen.' : '';
     return '';
@@ -3657,32 +3677,58 @@ function reqWizard(pre = {}) {
     const steps = wizSteps(w.type), key = steps[Math.min(step, steps.length - 1)];
     let body = '';
     if (key === 'type') body = `<div class="ws-tiles">${WIZ_TYPES.map(([t, ic, l]) => `<button type="button" class="ws-tile ${w.type === t ? 'on' : ''}" data-wtype="${esc(t)}"><span>${ic}</span><b>${esc(t)}</b><small>${esc(l)}</small></button>`).join('')}</div>`;
-    if (key === 'when') body = `<div class="wz-f"><label>Datum</label>${chips('date', [['Heute', T], ['Morgen', addDays(T, 1)], ['Übermorgen', addDays(T, 2)]])}${inp('date', 'date')}</div>
+    if (key === 'when' && w.type !== 'Maske') body = `<div class="wz-f"><label>Datum</label>${chips('date', [['Heute', T], ['Morgen', addDays(T, 1)], ['Übermorgen', addDays(T, 2)]])}${inp('date', 'date')}</div>
       <div class="wz-f"><label>${/Studio/.test(w.type) ? 'Beginn' : 'Sende- / Drehbeginn'}</label>${chips('time', ['09:00', '10:00', '11:00', '12:00', '14:00', '16:00', '18:00'].map(x => [x, x]))}${inp('time', 'time')}</div>
       ${/Studio/.test(w.type) ? `<div class="wz-f"><label>Dauer</label>${chips('dur', [['30 Min.', 30], ['1 Std.', 60], ['1,5 Std.', 90], ['2 Std.', 120]])}${w.time ? `<span class="muted">bis ${endTime()}</span>` : ''}</div>` : ''}
       <div class="wz-f"><label>Sendung / Format</label>${inp('production', 'text', 'z. B. Show-Talk', 'titles')}</div>`;
+    if (key === 'when' && w.type === 'Maske') {
+      const need = mkNeed(w), fw = mkFreeWindows(w.date, need), names = splitNames(w.talent);
+      const stdTxt = names.length ? names.map(n => `${esc(n)} ${mkStdDur(w.genders[n] || 'Herr')} Min.`).join(' · ') : '';
+      if (w.mkStart && !fw.fits(tmin(w.mkStart)) && !w._mkManual) w.mkStart = '';
+      const chosenOk = w.mkStart ? fw.fits(tmin(w.mkStart)) : null;
+      const win = x => { const shown = x.starts.length > 12 ? x.starts.filter((s, i) => i % 2 === 0 || s === x.last) : x.starts;
+        return `<div class="mkw"><div class="mkw-h"><b>${mint(x.first)}–${mint(x.last + need.len)}</b><span class="muted">frei · ${Math.round((x.last + need.len - x.first) / 60 * 10) / 10} Std.</span></div>
+        <div class="pq-quick">${shown.map(s => `<button type="button" class="chip ${w.mkStart === mint(s) ? 'on' : ''}" data-wmk="${mint(s)}" aria-label="Maske ab ${mint(s)} bis ${mint(s + need.len)}">${mint(s)}</button>`).join('')}</div></div>`; };
+      // Tagesleiste: Belegung vs. Kapazität
+      const span = fw.close - fw.open, pct = m2 => ((m2 - fw.open) / span * 100).toFixed(2);
+      const segs = []; for (let t = fw.open; t < fw.close; t += 15) { const c = Math.max(...[0, 5, 10].map(o => mkCountAt(fw.items, t + o))); segs.push(`<i class="mkb-s ${c >= need.cap ? 'full' : c ? 'part' : ''}" style="left:${pct(t)}%;width:${(15 / span * 100).toFixed(2)}%"></i>`); }
+      const pick = w.mkStart ? `<i class="mkb-pick ${chosenOk ? '' : 'bad'}" style="left:${pct(tmin(w.mkStart))}%;width:${(need.len / span * 100).toFixed(2)}%"></i>` : '';
+      const scale = []; for (let h = Math.ceil(fw.open / 120) * 120; h <= fw.close; h += 120) scale.push(`<span style="left:${pct(h)}%">${pad(h / 60)}</span>`);
+      body = `<div class="wz-f"><label>Datum</label>${chips('date', [['Heute', T], ['Morgen', addDays(T, 1)], ['Übermorgen', addDays(T, 2)]])}${inp('date', 'date')}</div>
+      <div class="wz-f"><label>Benötigte Zeit in der Maske <span class="muted" style="font-weight:400">– optional</span></label>
+        <div class="pq-quick">${[['Standard', ''], ['15 Min.', 15], ['30 Min.', 30], ['45 Min.', 45], ['60 Min.', 60], ['90 Min.', 90]].map(([l, v]) => `<button type="button" class="chip ${String(w.mkDur || '') === String(v) ? 'on' : ''}" data-wmkdur="${v}">${l}</button>`).join('')}
+        <span class="pq-row"><input class="input mk-durin" type="number" min="5" max="240" step="5" data-w="mkDur" value="${esc(w.mkDur || '')}" placeholder="Min." aria-label="Benötigte Zeit in Minuten"><span class="muted">Min.</span></span></div>
+        <span class="muted" style="font-size:0.75rem">${need.auto ? `Standard laut Maske: ${stdTxt}` : `${need.dur} Min. pro Person`}${need.n > 1 ? ` · ${need.n} Personen, max. ${need.cap} gleichzeitig → Fenster ${need.len} Min.` : ''}</span></div>
+      <div class="wz-f"><label>Freie Zeitfenster am ${WDL[parseISO(w.date).getDay()]}, ${fmtDate(w.date)} <span class="muted" style="font-weight:400">– Startzeit antippen</span></label>
+        <div class="mkbar" aria-hidden="true"><div class="mkb-track">${segs.join('')}${pick}</div><div class="mkb-scale">${scale.join('')}</div></div>
+        <div class="legend"><span><i style="background:rgba(34,197,94,.35)"></i>frei</span><span><i style="background:rgba(234,179,8,.75)"></i>teilweise belegt</span><span><i style="background:rgba(239,68,68,.85)"></i>voll</span>${w.mkStart ? '<span><i style="background:#fff"></i>deine Auswahl</span>' : ''}</div>
+        ${fw.wins.length ? `<div class="mkws">${fw.wins.map(win).join('')}</div>` : `<div class="warnbox">An diesem Tag ist in der Maske kein passendes Fenster mehr frei${need.auto ? '' : ' – evtl. kürzere Zeit wählen'}. Du kannst trotzdem eine Uhrzeit angeben, die Produktion meldet sich.</div>`}
+        <div class="pq-row" style="margin-top:8px"><span class="muted">Andere Uhrzeit:</span><input class="input" type="time" step="300" data-w="mkStart" value="${esc(w.mkStart || '')}" aria-label="Eigene Startzeit Maske"></div>
+        ${w.mkStart ? `<div class="${chosenOk ? 'okbox' : 'warnbox'}">${chosenOk ? '✅' : '⚠️'} Maske ${esc(w.mkStart)}–${mint(tmin(w.mkStart) + need.len)} Uhr${chosenOk ? ' – da ist Platz.' : ' – zu der Zeit ist die Maske voll. Die Produktion meldet sich mit einer Alternative.'}</div>` : ''}</div>
+      <div class="wz-f"><label>Sendung / Format</label>${inp('production', 'text', 'z. B. Show-Talk', 'titles')}</div>`;
+    }
     if (key === 'who') {
       const names = splitNames(w.talent), cap = mkCfgD(w.date).capacity;
       const rows = names.map(n => {
         const g = w.genders[n] || '';
-        const win = g && w.time ? reqMkWindow({ onAir: w.time, gender: g }) : null;
+        const win = g && w.time && w.type !== 'Maske' ? reqMkWindow({ onAir: w.time, gender: g }) : null;
         return `<div class="wz-person"><b>${esc(n)}</b>${seg2(n, g)}${win ? `<span class="muted">💄 ca. ${win.start}–${mint(win.e)}</span>` : ''}</div>`;
       }).join('');
       let info = '';
-      if (names.length && names.every(n => w.genders[n]) && w.time) {
+      if (names.length && names.every(n => w.genders[n]) && w.time && w.type !== 'Maske') {
         const items = mkLoadItems(w.date, true); let peak = 0;
         names.forEach(n => { const win = reqMkWindow({ onAir: w.time, gender: w.genders[n] }); for (let t = win.s; t < win.e; t += 5) peak = Math.max(peak, mkCountAt(items, t)); });
         const ok = peak + Math.min(names.length, cap) <= cap || (names.length === 1 && peak < cap);
         info = `<div class="${ok ? 'okbox' : 'warnbox'}">${names.length > 1 ? `💄 ${names.length} Personen – die Maske plant sie nacheinander bzw. parallel ein. ` : ''}${ok ? '✅ Zu der Zeit ist in der Maske Platz.' : '⚠️ Zu der Zeit wird es in der Maske eng – die Produktion meldet sich mit einer Alternative.'}</div>`;
       }
       body = `<div class="wz-f"><label>Wer kommt in die Maske? <span class="muted" style="font-weight:400">– mehrere Personen mit Komma trennen</span></label>${inp('talent', 'text', 'z. B. Anna Muster, Max Beispiel', 'guests')}</div>
-        ${names.length ? `<div class="wz-f"><label>Herr / Dame je Person</label><div class="wz-people">${rows}</div></div>` : ''}
-        <div class="wz-f"><label>Wo?</label>${seg('location', db.options.mkLocations)}</div>${info}`;
+        ${names.length ? `<div class="wz-f"><label>Herr / Dame <span class="muted" style="font-weight:400">– optional, hilft der Maske bei der Zeitplanung</span></label><div class="wz-people">${rows}</div></div>` : ''}
+        <div class="muted" style="font-size:0.75rem">Maske in der Regel im 7.OG – den Ort teilt die Produktion zu.</div>${info}`;
     }
     if (key === 'studio') {
       const list = w.time ? studiosFreeAt(w.date, w.time, endTime()) : db.studios.map(st => ({ st, free: true }));
       const chosen = list.find(x => x.st.id === w.studioId), alternatives = chosen && !chosen.free ? studioAlternativeTimes(w.date, w.studioId, w.time, endTime()) : [];
-      body = `<div class="muted" style="margin-bottom:8px">${fmtShort(w.date)} ${w.time}–${endTime()} · grün = frei</div><div class="ctiles">${list.map(x => `<button type="button" class="ctile ${x.free ? 'ok' : 'busy'} ${w.studioId === x.st.id ? 'sel' : ''}" data-wset="studioId" data-v="${x.st.id}"><div class="ct-top"><b><i class="sw" style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${x.st.color}"></i> ${esc(x.st.name)}</b></div><div class="ct-st">${x.free ? '✅ frei' : `⛔ ${esc(x.hit && isBlock(x.hit.type) ? x.hit.type : 'belegt')}`}</div>${w.studioId === x.st.id ? '<div class="ct-badge">✔ gewählt</div>' : ''}</button>`).join('')}</div>${chosen && !chosen.free ? `<div class="warnbox" style="margin-top:10px"><b>${esc(chosen.st.name)} ist im gewünschten Slot belegt.</b>${alternatives.length ? `<div class="muted" style="margin-top:4px">Alternative Zeiten im selben Studio:</div><div class="alt-times">${alternatives.map(a => `<button type="button" class="chip" data-walt="${a.start}">${a.start}–${a.end}</button>`).join('')}</div>` : '<div class="muted" style="margin-top:4px">Kein passender Alternativslot an diesem Tag gefunden.</div>'}</div>` : ''}${w.type === 'Studio' ? `<div class="wz-f" style="margin-top:12px"><label>Personen / Gäste (optional, mit Komma trennen)</label>${inp('talent', 'text', 'z. B. Anna Muster, Max Beispiel', 'guests')}</div>` : ''}`;
+      body = `<div class="muted" style="margin-bottom:8px">${fmtShort(w.date)} ${w.time}–${endTime()} · grün = frei</div><div class="ctiles">${list.map(x => `<button type="button" class="ctile ${x.free ? 'ok' : 'busy'} ${w.studioId === x.st.id ? 'sel' : ''}" data-wset="studioId" data-v="${x.st.id}"><div class="ct-top"><b><i class="sw" style="display:inline-block;width:10px;height:10px;border-radius:4px;background:${x.st.color}"></i> ${esc(x.st.name)}</b></div><div class="ct-st">${x.free ? '✅ frei' : `⛔ ${esc(x.hit && isBlock(x.hit.type) ? x.hit.type : 'belegt')}`}</div>${w.studioId === x.st.id ? '<div class="ct-badge">✔ gewählt</div>' : ''}</button>`).join('')}</div>${chosen && !chosen.free ? `<div class="warnbox" style="margin-top:8px"><b>${esc(chosen.st.name)} ist im gewünschten Slot belegt.</b>${alternatives.length ? `<div class="muted" style="margin-top:4px">Alternative Zeiten im selben Studio:</div><div class="alt-times">${alternatives.map(a => `<button type="button" class="chip" data-walt="${a.start}">${a.start}–${a.end}</button>`).join('')}</div>` : '<div class="muted" style="margin-top:4px">Kein passender Alternativslot an diesem Tag gefunden.</div>'}</div>` : ''}${w.type === 'Studio' ? `<div class="wz-f" style="margin-top:16px"><label>Personen / Gäste (optional, mit Komma trennen)</label>${inp('talent', 'text', 'z. B. Anna Muster, Max Beispiel', 'guests')}</div>` : ''}`;
     }
     if (key === 'cut') {
       const dups = w.title.trim().length >= 4 ? similarEdits({ title: w.title, deadline: w.deadline }) : [];
@@ -3696,7 +3742,7 @@ function reqWizard(pre = {}) {
     }
     if (key === 'cam') {
       const av = w.time ? camAvail(w.date, w.time, endTime()) : null;
-      body = `<div class="wz-f"><label>Wofür?</label>${seg('kind', ['Schreibtisch-Talk', 'Vertraulich'])}${w.kind === 'Vertraulich' ? '<div class="muted" style="font-size:12px">🔒 Vertrauliche Anfragen sehen nur du und die Produktion.</div>' : ''}</div>
+      body = `<div class="wz-f"><label>Wofür?</label>${seg('kind', ['Schreibtisch-Talk', 'Vertraulich'])}${w.kind === 'Vertraulich' ? '<div class="muted" style="font-size:0.75rem">🔒 Vertrauliche Anfragen sehen nur du und die Produktion.</div>' : ''}</div>
         <div class="wz-f"><label>${w.kind === 'Vertraulich' ? 'Arbeitstitel (nur für die Produktion sichtbar)' : 'Thema'}</label>${inp('title', 'text', w.kind === 'Vertraulich' ? 'z. B. Hintergrundgespräch Politik' : 'z. B. Talk mit Chefreporter zu …')}</div>
         <div class="wz-f"><label>Datum</label>${chips('date', [['Heute', T], ['Morgen', addDays(T, 1)], ['Übermorgen', addDays(T, 2)]])}${inp('date', 'date')}</div>
         <div class="wz-f"><label>Beginn</label>${chips('time', ['09:00', '10:00', '11:00', '12:00', '14:00', '16:00'].map(x => [x, x]))}${inp('time', 'time')}</div>
@@ -3719,15 +3765,15 @@ function reqWizard(pre = {}) {
     if (key === 'binden') {
       const need = (+w.protagonists || 0) + (+w.interviewers || 0), have = w.binden.split('\n').filter(x => x.trim()).length;
       body = `<div class="wz-f"><label>🏷 Bauchbinden / Taufen aller Beteiligten <span class="muted" style="font-weight:400">– eine Zeile pro Person: Name – Funktion</span></label><textarea class="input" data-w="binden" rows="5" placeholder="Max Mustermann – Bundesminister der Finanzen&#10;Anna Beispiel – BILD-Chefreporterin">${esc(w.binden)}</textarea>
-        <div class="${have >= need ? 'okbox' : 'infobox'}" style="margin:6px 0 0">${have} von ${need} Bauchbinden eingetragen (${w.protagonists} Protagonist${+w.protagonists === 1 ? '' : 'en'} + ${w.interviewers} Interviewer)</div></div>
+        <div class="${have >= need ? 'okbox' : 'infobox'}" style="margin:8px 0 0">${have} von ${need} Bauchbinden eingetragen (${w.protagonists} Protagonist${+w.protagonists === 1 ? '' : 'en'} + ${w.interviewers} Interviewer)</div></div>
         <div class="wz-f"><label>📰 Themenbinden <span class="muted" style="font-weight:400">– eine Zeile pro Binde</span></label><textarea class="input" data-w="themen" rows="3" placeholder="Haushalt 2027: Wo jetzt gespart wird">${esc(w.themen)}</textarea></div>`;
     }
     if (key === 'live') {
       const dups = w.title.trim().length >= 4 ? similarLive({ title: w.title, date: w.date }) : [];
       body = `<div class="wz-f"><label>Worum geht es?</label>${inp('title', 'text', 'z. B. CSU-Parteitag – Rede Söder')}</div>
-        ${dups.length ? `<div class="dupbox"><b>🤔 Meinst du vielleicht …?</b> <span class="muted">Das läuft schon:</span>${dups.map(d => `<div class="duprow"><div style="flex:1"><b>${esc(d.rec.title || d.rec.name)}</b> <span class="badge ${d.kind === 'stream' ? 'ok' : 'info'}">${d.kind === 'stream' ? 'schon geplant' : esc(liveStage(d.rec).label)}</span><div class="sub">${fmtShort(d.rec.date)} ${esc(d.rec.start || '')}${d.rec.source ? ' · ' + esc(d.rec.source) : ''}${d.kind === 'req' ? ' · ' + esc(reqBy(d.rec)) : ''}</div></div><button type="button" class="btn small primary" data-wlive="${d.kind}:${d.rec.id}">Ja, genau das</button></div>`).join('')}<div class="sub" style="margin-top:6px">Nichts davon? Einfach weiter ausfüllen.</div></div>` : ''}
+        ${dups.length ? `<div class="dupbox"><b>🤔 Meinst du vielleicht …?</b> <span class="muted">Das läuft schon:</span>${dups.map(d => `<div class="duprow"><div style="flex:1"><b>${esc(d.rec.title || d.rec.name)}</b> <span class="badge ${d.kind === 'stream' ? 'ok' : 'info'}">${d.kind === 'stream' ? 'schon geplant' : esc(liveStage(d.rec).label)}</span><div class="sub">${fmtShort(d.rec.date)} ${esc(d.rec.start || '')}${d.rec.source ? ' · ' + esc(d.rec.source) : ''}${d.kind === 'req' ? ' · ' + esc(reqBy(d.rec)) : ''}</div></div><button type="button" class="btn small primary" data-wlive="${d.kind}:${d.rec.id}">Ja, genau das</button></div>`).join('')}<div class="sub" style="margin-top:8px">Nichts davon? Einfach weiter ausfüllen.</div></div>` : ''}
         <div class="wz-f"><label>Woher kommt das Signal?</label>${chips('source', LIVE_SOURCES.map(x => [x, x]))}${needsSrcText(w.source) ? inp('sourceText', 'text', w.source === 'YouTube' ? 'YouTube-Link einfügen' : w.source === 'Veranstalter-Stream' ? 'Link zum Stream des Veranstalters' : 'Link oder kurze Beschreibung der Quelle') : ''}</div>
-        <div class="wz-f"><label>Datum</label>${chips('date', [['Heute', T], ['Morgen', addDays(T, 1)], ['Übermorgen', addDays(T, 2)]])}${inp('date', 'date')}<span class="muted" style="font-size:12px">Mehrtägig? bis ${inp('until', 'date')}</span></div>
+        <div class="wz-f"><label>Datum</label>${chips('date', [['Heute', T], ['Morgen', addDays(T, 1)], ['Übermorgen', addDays(T, 2)]])}${inp('date', 'date')}<span class="muted" style="font-size:0.75rem">Mehrtägig? bis ${inp('until', 'date')}</span></div>
         <div class="wz-f"><label>Beginn</label>${chips('start', ['08:00', '09:00', '10:00', '11:00', '12:00', '14:00', '18:00', '20:00'].map(x => [x, x]))}<div class="pq-row">${inp('start', 'time')}<span class="muted">bis ca.</span>${inp('end', 'time')}</div></div>
         <div class="wz-f"><label>Free oder Plus?</label>${seg('access', ['Free', 'Plus'])}</div>
         <div class="wz-f"><label>🎞 Aufzeichnung & Replay</label><div class="pq-quick">${REC_OPTS.map(o => `<button type="button" class="chip ${w.recording.includes(o) ? 'on' : ''}" data-wtog="recording" data-v="${esc(o)}">${esc(REC_SHORT[o] || o)}</button>`).join('')}</div></div>`;
@@ -3738,34 +3784,41 @@ function reqWizard(pre = {}) {
       body = `<div class="wz-sum">${summary().map(([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div>${warn.length ? `<div class="warnbox">⚠️ ${warn.map(esc).join('<br>⚠️ ')}<div class="muted" style="margin-top:4px">Du kannst trotzdem anfragen – die Produktion prüft das.</div></div>` : ''}<div class="wz-f"><label>${w.type === 'Produktion' ? 'Weitere Wünsche' : 'Hinweise / Wünsche'} (optional)</label><textarea class="input" data-w="notes" rows="3" placeholder="${esc(notesPh())}">${esc(w.notes)}</textarea></div>`;
     }
     $('#wz', m).innerHTML = `<div class="wz-steps">${steps.map((k, i) => `<span class="${i === step ? 'on' : i < step ? 'done' : ''}">${i < step ? '✓' : i + 1} ${WIZ_LABEL[k]}</span>`).join('')}</div><div class="wz-body">${body}</div><div id="wzErr"></div>
-      <div class="modal-f" style="margin:14px -18px -16px">${step > 0 ? '<button class="btn left" data-wnav="back">‹ Zurück</button>' : '<span class="left"></span>'}<button class="btn" data-m="close">Abbrechen</button>${key === 'sum' ? '<button class="btn" data-wnav="mail">✉️ Senden & per E-Mail ergänzen</button><button class="btn primary" data-wnav="send">📨 Anfrage senden</button>' : key === 'type' ? '' : '<button class="btn primary" data-wnav="next">Weiter ›</button>'}</div>`;
+      <div class="modal-f" style="margin:16px -16px -16px">${step > 0 ? '<button class="btn left" data-wnav="back">‹ Zurück</button>' : '<span class="left"></span>'}<button class="btn" data-m="close">Abbrechen</button>${key === 'sum' ? '<button class="btn" data-wnav="mail">✉️ Senden & per E-Mail ergänzen</button><button class="btn primary" data-wnav="send">📨 Anfrage senden</button>' : key === 'type' ? '' : '<button class="btn primary" data-wnav="next">Weiter ›</button>'}</div>`;
     const f = $('[data-w]', $('.wz-body', m)); if (f && !f.value && f.type !== 'date') setTimeout(() => f.focus(), 30);
   };
   const send = () => {
-    if (w.type === 'Kamera') { const r = buildCam(); saveRecord('camReqs', r, true); toast('🎥 Kamera angefragt – die Produktion sieht die Anfrage sofort.', 'ok'); closeModal(); render(); return ['camReqs', r.id]; }
-    if (w.type === 'Produktion') { const r = buildProd(); saveRecord('prodReqs', r, true); toast('🎙 Produktion angefragt – die Produktion sieht die Anfrage sofort.', 'ok'); closeModal(); render(); return ['prodReqs', r.id]; }
-    if (w.type === 'Live-Stream') { const r = buildLive(); saveRecord('liveReqs', r, true); toast('📡 Live-Stream angefragt – Produktion & Video Producer sehen die Anfrage sofort.', 'ok'); closeModal(); render(); return ['liveReqs', r.id]; }
-    if (w.type === 'Schnitt') { const r = buildEdit(); saveRecord('edits', r, true); toast('📨 Schnitt-Anfrage gesendet – die Produktion sieht sie im Schnitt-Board.', 'ok'); closeModal(); render(); return ['edits', r.id]; }
-    const r = buildReq(); saveRecord('requests', r, true); toast('📨 Anfrage gesendet – die Produktion wurde benachrichtigt.', 'ok'); closeModal(); render(); return ['requests', r.id];
+    if (w.type === 'Kamera') { const r = buildCam(); saveRecord('camReqs', r, true); reqToast('🎥 Kamera angefragt – die Produktion sieht die Anfrage sofort.', 'camReqs', r.id); closeModal(); render(); return ['camReqs', r.id]; }
+    if (w.type === 'Produktion') { const r = buildProd(); saveRecord('prodReqs', r, true); reqToast('🎙 Produktion angefragt – die Produktion sieht die Anfrage sofort.', 'prodReqs', r.id); closeModal(); render(); return ['prodReqs', r.id]; }
+    if (w.type === 'Live-Stream') { const r = buildLive(); saveRecord('liveReqs', r, true); reqToast('📡 Live-Stream angefragt – Produktion & Video Producer sehen die Anfrage sofort.', 'liveReqs', r.id); closeModal(); render(); return ['liveReqs', r.id]; }
+    if (w.type === 'Schnitt') { const r = buildEdit(); saveRecord('edits', r, true); reqToast('📨 Schnitt-Anfrage gesendet – die Produktion sieht sie im Schnitt-Board.', 'edits', r.id); closeModal(); render(); return ['edits', r.id]; }
+    const r = buildReq(); saveRecord('requests', r, true); reqToast('📨 Anfrage gesendet – die Produktion wurde benachrichtigt.', 'requests', r.id); closeModal(); render(); return ['requests', r.id];
   };
   m.addEventListener('input', e => { const k = e.target.dataset && e.target.dataset.w; if (!k) return; w[k] = e.target.value;
     if (k === 'binden') { const box = e.target.parentElement.querySelector('.okbox, .infobox'); const need = (+w.protagonists || 0) + (+w.interviewers || 0), have = w.binden.split('\n').filter(x => x.trim()).length; if (box) { box.className = have >= need ? 'okbox' : 'infobox'; box.textContent = `${have} von ${need} Bauchbinden eingetragen`; } } if (k === 'title') { clearTimeout(m._t); m._t = setTimeout(() => { const pos = e.target.selectionStart; draw(); const n = $('[data-w="title"]', m); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (x) { } } }, 400); } });
   m.addEventListener('change', e => { const k = e.target.dataset && e.target.dataset.w; if (!k) return; w[k] = e.target.value;
     if (k === 'talent') splitNames(w.talent).forEach(n => { if (!w.genders[n]) { const g = knownGender(n); if (g) w.genders[n] = g; } });
-    if (k === 'talent' && w.talent) { const last = db.requests.filter(r => r.talent === w.talent).sort((a, b) => b.createdAt - a.createdAt)[0]; w.gender = w.gender || knownGender(w.talent) || (last && last.gender) || ''; if (last && last.location) w.location = last.location; if (last && !w.production) w.production = last.production; }
-    if (['date', 'time', 'talent', 'production', 'deadline', 'publishDate'].includes(k)) draw(); });
+    if (k === 'talent' && w.talent) { const last = db.requests.filter(r => r.talent === w.talent).sort((a, b) => b.createdAt - a.createdAt)[0]; w.gender = w.gender || knownGender(w.talent) || (last && last.gender) || ''; if (last && !w.production) w.production = last.production; }
+    if (k === 'mkStart') w._mkManual = true;
+    if (m._nav) return;
+    if (['date', 'time', 'talent', 'production', 'deadline', 'publishDate', 'mkStart', 'mkDur'].includes(k)) draw(); });
+  m.addEventListener('pointerdown', e => { m._nav = !!e.target.closest('button'); }, true);
   m.addEventListener('click', e => {
+    const wasNav = m._nav; m._nav = false;
+    if (wasNav && !e.target.closest('[data-wtype],[data-wg],[data-wtog],[data-wlive],[data-wmk],[data-wmkdur],[data-walt],[data-wset],[data-wdup],[data-wnav]')) draw();
     const t = e.target.closest('[data-wtype]'); if (t) { w.type = t.dataset.wtype; setKind(); step = 1; draw(); return; }
-    const wg = e.target.closest('[data-wg]'); if (wg) { w.genders[wg.dataset.wg] = wg.dataset.v; draw(); return; }
+    const wg = e.target.closest('[data-wg]'); if (wg) { const n = wg.dataset.wg; w.genders[n] = w.genders[n] === wg.dataset.v ? '' : wg.dataset.v; draw(); return; }
     const tg = e.target.closest('[data-wtog]'); if (tg) { const k = tg.dataset.wtog, v = tg.dataset.v; w[k] = w[k].includes(v) ? w[k].filter(x => x !== v) : [...w[k], v]; draw(); return; }
     const lv = e.target.closest('[data-wlive]'); if (lv) { const [k, id] = lv.dataset.wlive.split(':'); closeModal(); if (k === 'req') joinLiveDialog(id); else openRecord('streams', id); return; }
+    const wmk = e.target.closest('[data-wmk]'); if (wmk) { w.mkStart = wmk.dataset.wmk; w._mkManual = false; draw(); return; }
+    const wmd = e.target.closest('[data-wmkdur]'); if (wmd) { w.mkDur = wmd.dataset.wmkdur; draw(); return; }
     const wa = e.target.closest('[data-walt]'); if (wa) { w.time = wa.dataset.walt; draw(); return; }
     const sv = e.target.closest('[data-wset]'); if (sv) { const k = sv.dataset.wset; w[k] = ['dur', 'setupMinutes', 'protagonists', 'interviewers'].includes(k) ? +sv.dataset.v : (w[k] === sv.dataset.v && k === 'deadlineTime' ? '' : sv.dataset.v); draw(); return; }
     const du = e.target.closest('[data-wdup]'); if (du) { closeModal(); joinEditDialog(du.dataset.wdup); return; }
     const nv = e.target.closest('[data-wnav]'); if (!nv) return;
     const key = wizSteps(w.type)[step];
     if (nv.dataset.wnav === 'back') { step = Math.max(0, step - 1); draw(); return; }
-    if (nv.dataset.wnav === 'next') { const err = valid(key); if (err) { $('#wzErr', m).innerHTML = `<div class="warnbox">${esc(err)}</div>`; return; } step++; draw(); return; }
+    if (nv.dataset.wnav === 'next') { const err = valid(key === 'when' && w.type === 'Maske' ? 'mkwhen' : key); if (err) { $('#wzErr', m).innerHTML = `<div class="warnbox">${esc(err)}</div>`; return; } step++; draw(); return; }
     if (nv.dataset.wnav === 'send' || nv.dataset.wnav === 'mail') { const [coll, id] = send(); if (nv.dataset.wnav === 'mail') setTimeout(() => reqMailDialog(coll, id), 0); }
   });
   draw();
@@ -3777,9 +3830,9 @@ function reqLines(coll, r) {
   if (coll === 'prodReqs') return [['Art', `🎙 ${r.kind}`], ['Thema', r.title], ['Datum', dt], ['Zeit', `${r.start || '?'}${r.end ? '–' + r.end : ''} Uhr`], ['Ort', r.place || ''], ...(r.kind === 'Außendreh' ? [['Ansprechpartner vor Ort', r.contact || '–'], ['Aufbau', `${r.setupMinutes == null ? 60 : r.setupMinutes} Min. · Crew ab ${prodSetupStart(r)} Uhr`]] : []), ['Protagonisten', String(r.protagonists ?? '')], ['Interviewer (BILD)', String(r.interviewers ?? '')], ...(r.publishDate ? [['Veröffentlichung', fmtShort(r.publishDate)]] : []), ...(r.binden ? [['Bauchbinden', r.binden.split('\n').filter(Boolean).join(' | ')]] : []), ...(r.themen ? [['Themenbinden', r.themen.split('\n').filter(Boolean).join(' | ')]] : []), ...(r.id ? [['Status', r.status]] : []), ...(r.notes ? [['Wünsche', r.notes]] : [])];
   if (coll === 'liveReqs') return [['Art', '📡 Live-Stream'], ['Thema', r.title], ['Quelle', r.source + (r.sourceText ? ' – ' + r.sourceText : '')], ['Datum', `${WDL[parseISO(r.date).getDay()]}, ${fmtDate(r.date)}${r.until ? ' – ' + fmtDate(r.until) : ''}`], ['Zeit', `${r.start || '?'}${r.end ? '–' + r.end : ''} Uhr`], ['Zugang', r.access || 'Free'], ['Aufzeichnung', (r.recording || []).map(x => REC_SHORT[x] || x).join(' + ') || '–'], ...(r.id ? [['Status', liveStage(r).label]] : []), ...(r.notes ? [['Hinweise', r.notes]] : [])];
   if (coll === 'edits') return [['Art', '✂️ Schnitt'], ['Thema', r.title], ['Abgabe', deadlineTxt(r)], ['Priorität', r.priority || 'Normal'], ...(r.output ? [['Ausspielung', r.output]] : []), ...(r.materialPath ? [['Material', r.materialPath]] : []), ...(r.staffId ? [['Cutter', (staffById(r.staffId) || {}).name || '']] : []), ...(r.id ? [['Status', r.status]] : []), ...(r.notes ? [['Hinweise', r.notes]] : [])];
-  const L = [['Art', r.reqType], ['Datum', `${WDL[parseISO(r.date).getDay()]}, ${fmtDate(r.date)}`], [/Studio/.test(r.reqType) ? 'Zeit' : 'Sende-/Drehbeginn', `${r.onAir || ''}${r.end ? '–' + r.end : ''} Uhr`], ['Sendung', r.production]];
+  const L = [['Art', r.reqType], ['Datum', `${WDL[parseISO(r.date).getDay()]}, ${fmtDate(r.date)}`], ...(r.mkStart && !/Studio/.test(r.reqType) ? [] : [[/Studio/.test(r.reqType) ? 'Zeit' : 'Sende-/Drehbeginn', `${r.onAir || ''}${r.end ? '–' + r.end : ''} Uhr`]]), ['Sendung', r.production]];
   if (/Studio/.test(r.reqType)) L.push(['Studio', studioById(r.studioId).name]);
-  if (/Maske/.test(r.reqType)) { L.push([(r.people || []).length > 1 ? 'Gäste' : 'Gast', (r.people || []).length > 1 ? r.people.map(x => `${x.name}${x.gender ? ' (' + x.gender + ')' : ''}`).join(', ') : `${r.talent}${r.gender ? ' (' + r.gender + ')' : ''}`], ['Maske', r.location]); const win = r.gender && r.onAir ? reqMkWindow(r) : null; if (win) L.push(['Maske ca.', `${win.start}–${mint(win.e)} Uhr`]); }
+  if (/Maske/.test(r.reqType)) { L.push([(r.people || []).length > 1 ? 'Gäste' : 'Gast', (r.people || []).length > 1 ? r.people.map(x => `${x.name}${x.gender ? ' (' + x.gender + ')' : ''}`).join(', ') : `${r.talent}${r.gender ? ' (' + r.gender + ')' : ''}`], ...(r.id && r.status !== 'Offen' && r.location ? [['Maske', r.location]] : [])); if (r.mkStart) { const n = Math.max(1, (r.people || []).length), cap = +mkCfg().capacity || 1, d = +r.mkDuration || mkStdDur(r.gender || 'Herr'); L.splice(2, 0, ['Zeit in der Maske', `${r.mkStart}–${mint(tmin(r.mkStart) + Math.ceil(n / cap) * d)} Uhr`]); L.push(['Benötigte Zeit', r.mkDuration ? `${r.mkDuration} Min. pro Person` : 'Standard (Herr/Dame)']); } else { const win = r.gender && r.onAir ? reqMkWindow(r) : null; if (win) L.push(['Maske ca.', `${win.start}–${mint(win.e)} Uhr`]); } }
   else if (r.talent && r.talent !== 'Studio') L.push(['Gast', r.talent]);
   if (r.id) L.push(['Status', r.status + (r.confirmText ? ' – ' + r.confirmText : '')]);
   if (r.notes) L.push(['Hinweise', r.notes]);
@@ -3791,7 +3844,7 @@ function reqMailDialog(coll, id) {
   const subj = `Anfrage ${({ edits: 'Schnitt', liveReqs: 'Live-Stream', camReqs: 'Kamera', prodReqs: 'Produktion' })[coll] || r.reqType}: ${title}${r.date ? ' – ' + fmtShort(r.date) : r.deadline ? ' – Abgabe ' + fmtShort(r.deadline) : ''}`;
   const bodyFor = c => [`Hallo zusammen,`, '', c ? `zu meiner Anfrage im Production Hub noch Folgendes:\n\n${c}` : 'anbei der Stand meiner Anfrage im Production Hub.', '', '— Stand der Anfrage —', ...reqLines(coll, r).map(([k, v]) => `${k}: ${v}`), '', 'Viele Grüße', me.name].join('\n');
   const m = showModal('✉️ Anfrage per E-Mail ergänzen', `<div class="infobox">Der bisherige Stand der Anfrage wird automatisch in die E-Mail übernommen – du ergänzt nur deinen Kommentar.</div>
-    <div class="form" style="grid-template-columns:1fr"><div class="f"><label>An</label><input class="input" id="rmTo" value="${esc(reqMailTo())}"></div><div class="f"><label>Betreff</label><input class="input" id="rmSubj" value="${esc(subj)}"></div><div class="f"><label>Dein Kommentar / weiteres Anliegen</label><textarea class="input" id="rmText" rows="4" placeholder="z. B. Gast bringt eigene Stylistin mit, bitte 3.OG …"></textarea></div><div class="f"><label>Vorschau</label><textarea class="input" id="rmPrev" rows="10" readonly style="font-size:12.5px"></textarea></div></div>`,
+    <div class="form" style="grid-template-columns:1fr"><div class="f"><label>An</label><input class="input" id="rmTo" value="${esc(reqMailTo())}"></div><div class="f"><label>Betreff</label><input class="input" id="rmSubj" value="${esc(subj)}"></div><div class="f"><label>Dein Kommentar / weiteres Anliegen</label><textarea class="input" id="rmText" rows="4" placeholder="z. B. Gast bringt eigene Stylistin mit, bitte 3.OG …"></textarea></div><div class="f"><label>Vorschau</label><textarea class="input" id="rmPrev" rows="10" readonly style="font-size:0.875rem"></textarea></div></div>`,
     '<button class="btn" data-m="close">Abbrechen</button><button class="btn" id="rmCopy">📋 Text kopieren</button><button class="btn primary" id="rmGo">✉️ In Outlook öffnen</button>');
   const upd = () => { $('#rmPrev', m).value = bodyFor($('#rmText', m).value.trim()); };
   upd(); $('#rmText', m).addEventListener('input', upd); setTimeout(() => $('#rmText', m).focus(), 30);
@@ -3833,10 +3886,10 @@ function vpNotesHtml(D) {
   const prev = vpDay(addDays(D, -1)).notes || [], cur = vpDay(D).notes || [];
   const note = n => `<div class="vp-note"><div class="sub"><span class="rchip">${esc(n.shift || '')}</span> ${esc(userName(n.by))} · ${fmtTs(n.ts)}</div><div>${esc(n.text).replace(/\n/g, '<br>')}</div></div>`;
   return `<div class="card"><h3>📝 Übergabe</h3>
-    ${prev.length ? `<div class="muted" style="font-size:12px;margin-bottom:4px">Vom Vortag</div>${prev.slice(-3).map(note).join('')}` : ''}
-    ${cur.length ? `<div class="muted" style="font-size:12px;margin:8px 0 4px">${fmtShort(D)}</div>${cur.map(note).join('')}` : ''}
+    ${prev.length ? `<div class="muted" style="font-size:0.75rem;margin-bottom:4px">Vom Vortag</div>${prev.slice(-3).map(note).join('')}` : ''}
+    ${cur.length ? `<div class="muted" style="font-size:0.75rem;margin:8px 0 4px">${fmtShort(D)}</div>${cur.map(note).join('')}` : ''}
     ${!prev.length && !cur.length ? '<div class="empty">Noch keine Übergabe-Notizen.</div>' : ''}
-    ${canVp() ? `<div style="margin-top:10px"><textarea class="input" id="vpNoteText" rows="3" placeholder="Was muss die nächste Schicht wissen? z. B. offene Tests, Umschaltungen, Auffälligkeiten …"></textarea><div class="toolbar" style="margin:6px 0 0">${vpShiftTypes().map(t => `<button class="btn small ${t.code === curVpShift() ? 'primary' : ''}" data-act="vpNoteAdd" data-date="${D}" data-shift="${esc(t.code)}">+ Notiz ${esc(t.code)}</button>`).join('')}<button class="btn small" data-act="noteToIssue">⚠️ Als Störung erfassen</button></div></div>` : ''}</div>`;
+    ${canVp() ? `<div style="margin-top:8px"><textarea class="input" id="vpNoteText" rows="3" placeholder="Was muss die nächste Schicht wissen? z. B. offene Tests, Umschaltungen, Auffälligkeiten …"></textarea><div class="toolbar" style="margin:8px 0 0">${vpShiftTypes().map(t => `<button class="btn small ${t.code === curVpShift() ? 'primary' : ''}" data-act="vpNoteAdd" data-date="${D}" data-shift="${esc(t.code)}">+ Notiz ${esc(t.code)}</button>`).join('')}<button class="btn small" data-act="noteToIssue">⚠️ Als Störung erfassen</button></div></div>` : ''}</div>`;
 }
 function vpDashboard(main) {
   if (!state.date.vpd) state.date.vpd = today();
@@ -3849,7 +3902,7 @@ function vpDashboard(main) {
   const live = bk.filter(b => b.live);
   const row = (time, title, sub, coll, rec) => `<div class="list-row" data-act="open" data-coll="${coll}" data-id="${rec.id}"><div class="time">${time}</div><div style="min-width:0"><div>${esc(title)}${newCell(rec)}</div><div class="sub">${sub}</div></div></div>`;
   const hints = db.streams.filter(s => s.kind === 'Hinweistag' && s.date === D);
-  main.innerHTML = `<div class="toolbar">${dateNav('vpd', `${WDL[parseISO(D).getDay()]}, ${fmtDate(D)}`, 'day')}<span class="spacer"></span><span class="muted" style="font-size:12px">Zeiten in ${tzLabel(D)}</span></div>
+  main.innerHTML = `<div class="toolbar">${dateNav('vpd', `${WDL[parseISO(D).getDay()]}, ${fmtDate(D)}`, 'day')}<span class="spacer"></span><span class="muted" style="font-size:0.75rem">Zeiten in ${tzLabel(D)}</span></div>
     ${hints.map(h => `<div class="warnbox">⚠️ <b>${esc(h.name)}</b> ${esc(h.notes || '')}</div>`).join('')}
     <div class="kpis">
       <div class="kpi" data-act="vpGo" data-to="studio"><b>${bk.length}</b><span>🎬 Studio-Produktionen${live.length ? ` · ${live.length} live` : ''}</span></div>
@@ -3859,7 +3912,7 @@ function vpDashboard(main) {
     </div>
     <div class="grid">
       ${vpRosterHtml(D)}
-      <div class="card"><h3>🎬 Studio ${D === T ? 'heute' : fmtShort(D)} <span class="badge">${bk.length}</span></h3>${bk.map(b => row(b.allDay ? 'ganztägig' : `${b.start}–${b.end}`, b.title, `<i class="sw" style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${studioById(b.studioId).color}"></i> ${esc(studioById(b.studioId).name)}${b.live ? ' · ' + liveChip(b) : ''}`, 'bookings', b)).join('') || '<div class="empty">Keine Studio-Produktionen.</div>'}</div>
+      <div class="card"><h3>🎬 Studio ${D === T ? 'heute' : fmtShort(D)} <span class="badge">${bk.length}</span></h3>${bk.map(b => row(b.allDay ? 'ganztägig' : `${b.start}–${b.end}`, b.title, `<i class="sw" style="display:inline-block;width:8px;height:8px;border-radius:4px;background:${studioById(b.studioId).color}"></i> ${esc(studioById(b.studioId).name)}${b.live ? ' · ' + liveChip(b) : ''}`, 'bookings', b)).join('') || '<div class="empty">Keine Studio-Produktionen.</div>'}</div>
       <div class="card"><h3>📡 Streaming ${D === T ? 'heute' : fmtShort(D)} <span class="badge">${st.length}</span></h3>${st.map(s => row(`${s.start || ''}–${s.end || ''}`, s.name, `${routeChips(s)} ${recChip(s)}`, 'streams', s)).join('') || '<div class="empty">Keine Streams.</div>'}</div>
       <div class="card"><h3>🧪 Anstehende Tests <span class="badge">${tests.length}</span></h3>${tests.map(testItemHtml).join('') || '<div class="empty">Keine Tests in den nächsten Tagen.</div>'}</div>
       ${openLiveReqs().length ? `<div class="card" style="border-color:var(--new)"><h3>📨 Neue Live-Stream-Anfragen <span class="badge new">${openLiveReqs().length}</span></h3><div class="lr-list compact">${openLiveReqs().map(r => liveReqItem(r, true)).join('')}</div></div>` : ''}
@@ -3871,7 +3924,7 @@ function vpDashboard(main) {
 }
 function vpRosterDialog(d) {
   const r = vpRoster(d), vps = vpStaff();
-  const m = showModal(`👥 Dienstplan · ${WDL[parseISO(d).getDay()]}, ${fmtDate(d)}`, `${vpShiftTypes().map(t => `<div class="wz-f"><label>${esc(t.code)} · ${t.start}–${t.end}</label><div class="multi">${vps.map(p => `<label><input type="checkbox" data-vsh="${esc(t.code)}" value="${p.id}" ${(r[t.code] || []).includes(p.id) ? 'checked' : ''}>${esc(p.name)}</label>`).join('') || '<span class="muted">Noch keine Video Producer unter Personal angelegt.</span>'}</div></div>`).join('')}<label class="toggle" style="font-size:13px"><input type="checkbox" id="vsCopy"> auch für die restlichen Tage dieser Woche übernehmen</label>`,
+  const m = showModal(`👥 Dienstplan · ${WDL[parseISO(d).getDay()]}, ${fmtDate(d)}`, `${vpShiftTypes().map(t => `<div class="wz-f"><label>${esc(t.code)} · ${t.start}–${t.end}</label><div class="multi">${vps.map(p => `<label><input type="checkbox" data-vsh="${esc(t.code)}" value="${p.id}" ${(r[t.code] || []).includes(p.id) ? 'checked' : ''}>${esc(p.name)}</label>`).join('') || '<span class="muted">Noch keine Video Producer unter Personal angelegt.</span>'}</div></div>`).join('')}<label class="toggle" style="font-size:0.875rem"><input type="checkbox" id="vsCopy"> auch für die restlichen Tage dieser Woche übernehmen</label>`,
     '<button class="btn" data-m="close">Abbrechen</button><button class="btn primary" id="vsGo">Speichern</button>', 'small');
   $('#vsGo', m).addEventListener('click', () => {
     const val = {}; vpShiftTypes().forEach(t => { val[t.code] = $$(`[data-vsh="${t.code}"]:checked`, m).map(i => i.value); });
@@ -3886,7 +3939,7 @@ Object.assign(ACTIONS, {
   vpCheck: d => { if (!canVp()) return; const day = vpDay(d.date), it = vpChecklist()[+d.i]; if (!it) return; const checks = { ...day.checks }; if (checks[it]) delete checks[it]; else checks[it] = { by: me.id, ts: Date.now() }; vpDaySave(d.date, { ...day, checks }); render(); },
   vpCheckNote: d => {
     const it = vpChecklist()[+d.i]; if (!it) return; const day = vpDay(d.date), c = day.checks[it] || {};
-    const m = showModal('💬 Kommentar', `<div class="muted" style="margin-bottom:6px">${esc(it)}</div><textarea class="input" id="vcN" rows="3">${esc(c.note || '')}</textarea><label class="toggle"><input type="checkbox" id="vcD" ${day.checks[it] ? 'checked' : ''}> erledigt</label>`, '<button class="btn" data-m="close">Abbrechen</button><button class="btn primary" id="vcGo">Speichern</button>', 'small');
+    const m = showModal('💬 Kommentar', `<div class="muted" style="margin-bottom:8px">${esc(it)}</div><textarea class="input" id="vcN" rows="3">${esc(c.note || '')}</textarea><label class="toggle"><input type="checkbox" id="vcD" ${day.checks[it] ? 'checked' : ''}> erledigt</label>`, '<button class="btn" data-m="close">Abbrechen</button><button class="btn primary" id="vcGo">Speichern</button>', 'small');
     setTimeout(() => $('#vcN', m).focus(), 30);
     $('#vcGo', m).addEventListener('click', () => { const checks = { ...day.checks }, note = $('#vcN', m).value.trim(); if ($('#vcD', m).checked) checks[it] = { by: (checks[it] || {}).by || me.id, ts: (checks[it] || {}).ts || Date.now(), note }; else delete checks[it]; vpDaySave(d.date, { ...day, checks }); closeModal(); render(); });
   },
@@ -3966,7 +4019,7 @@ function vpEventChecklistHtml(D) {
   return `<div class="card vp-wide"><h3>✅ Checkliste ${fmtShort(D)} – aus den Events <span class="badge ${ck.done === ck.all.length && ck.all.length ? 'ok' : ''}">${ck.done}/${ck.all.length}</span></h3><div class="loadbar" style="margin-bottom:8px"><i style="width:${pct}%"></i></div>
     ${ck.events.map(e => { const d = e.tasks.filter(t => t.done).length; return `<div class="ec-ev"><div class="ec-head" data-act="open" data-coll="${e.coll}" data-id="${e.rec.id}"><b>${esc(e.rec.allDay ? 'ganztägig' : e.start)}</b> ${esc(e.rec.name || e.rec.title)} <span class="muted">${e.coll === 'bookings' ? '🎬 Studio live' : '📡 Stream'}</span><span class="badge ${d === e.tasks.length ? 'ok' : ''}" style="margin-left:auto">${d}/${e.tasks.length}</span></div>${e.tasks.map(t => taskRow(D, t, e)).join('')}</div>`; }).join('') || '<div class="empty">An diesem Tag wird nichts live gestreamt – keine Punkte.</div>'}
     ${ck.general.length ? `<div class="ec-ev"><div class="ec-head"><b>Allgemein</b></div>${ck.general.map(t => taskRow(D, t, null)).join('')}</div>` : ''}
-    <div class="muted" style="font-size:12px;margin-top:6px">→ = ergibt sich aus den Event-Daten (Klick führt direkt zum Eintrag) · ☐ = zum Abhaken, mit 💬 Kommentar für die Übergabe</div></div>`;
+    <div class="muted" style="font-size:0.75rem;margin-top:8px">→ = ergibt sich aus den Event-Daten (Klick führt direkt zum Eintrag) · ☐ = zum Abhaken, mit 💬 Kommentar für die Übergabe</div></div>`;
 }
 const SEV_RANK = { 'Ausfall': 0, 'Störung': 1, 'Einschränkung': 2, 'Hinweis': 3 };
 const SEV_CLS = { 'Ausfall': 'bad', 'Störung': 'bad', 'Einschränkung': 'warn', 'Hinweis': 'info' };
@@ -3998,7 +4051,7 @@ function issuesView() {
   return `<div class="toolbar">${tabsHtml('streams', STREAM_TABS())}${streamMenuHtml()}<span class="spacer"></span>${openIssues().length ? '<button class="btn" data-act="bugReport">🐞 Report a Bug (alle offenen)</button>' : ''}${newBtn('newIssue', '+ Störung melden')}</div>
     <div class="table-wrap"><table class="t" style="min-width:900px"><thead><tr><th>Auswirkung</th><th>Status</th><th>Problem</th><th>Bereich / Technik</th><th>Event</th><th>Seit</th><th>💡 Lösungsansatz</th><th></th></tr></thead><tbody>
     ${all.map(i => { const e = issueEvent(i.eventRef); return `<tr class="row ${newState(i) ? 'is-new' : ''} ${i.status === 'Behoben' ? 'past' : ''}" data-act="open" data-coll="issues" data-id="${i.id}"><td><span class="badge ${SEV_CLS[i.severity] || ''}">${esc(i.severity)}</span></td><td>${esc(i.status)}</td><td><b>${esc(i.title)}</b>${newCell(i)}</td><td>${esc(i.category || '')}${i.affects ? `<div class="muted">${esc(i.affects)}</div>` : ''}</td><td>${e ? esc(e.rec.name || e.rec.title) : '<span class="muted">allgemein</span>'}</td><td>${fmtShort(i.date)}</td><td style="max-width:320px">${esc(i.workaround || '')}</td><td><button class="btn small" data-act="bugReport" data-id="${i.id}">🐞</button></td></tr>`; }).join('') || '<tr><td colspan="8" class="empty">Noch keine Störungen erfasst.</td></tr>'}
-    </tbody></table></div><div class="muted" style="font-size:12px;margin-top:8px">Behobene Störungen bleiben als Wissensbasis erhalten – beim Erfassen einer neuen Störung schlägt das Tool frühere Lösungsansätze aus dem gleichen Bereich vor.</div>`;
+    </tbody></table></div><div class="muted" style="font-size:0.75rem;margin-top:8px">Behobene Störungen bleiben als Wissensbasis erhalten – beim Erfassen einer neuen Störung schlägt das Tool frühere Lösungsansätze aus dem gleichen Bereich vor.</div>`;
 }
 function issueHints(form, cur) {
   if (!form.parentElement || !can.edit()) return;
@@ -4031,7 +4084,7 @@ function bugText(list) {
 function bugReportDialog(ids) {
   const list = ids && ids.length ? (db.issues || []).filter(i => ids.includes(i.id)) : openIssues();
   if (!list.length) { toast('Keine offenen Störungen.', ''); return; }
-  const m = showModal('🐞 Report a Bug', `<div class="infobox">Zusammenfassung zum Kopieren – z. B. für Support, Dienstleister oder Teams.</div><textarea class="input" id="bugTxt" rows="18" style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px">${esc(bugText(list))}</textarea>`,
+  const m = showModal('🐞 Report a Bug', `<div class="infobox">Zusammenfassung zum Kopieren – z. B. für Support, Dienstleister oder Teams.</div><textarea class="input" id="bugTxt" rows="18" style="font-family:ui-monospace,Menlo,monospace;font-size:0.875rem">${esc(bugText(list))}</textarea>`,
     '<button class="btn" data-m="close">Schließen</button><button class="btn" id="bugMail">✉️ Als E-Mail</button><button class="btn primary" id="bugCopy">📋 Kopieren</button>');
   $('#bugCopy', m).addEventListener('click', () => { const t = $('#bugTxt', m).value; (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast('📋 Bug-Report kopiert', 'ok'), () => { $('#bugTxt', m).select(); toast('Markiert – mit ⌘C kopieren', ''); }); });
   $('#bugMail', m).addEventListener('click', () => { try { window.location.href = `mailto:?subject=${encodeURIComponent(`Störungsmeldung Streaming – ${fmtDate(today())}`)}&body=${encodeURIComponent($('#bugTxt', m).value)}`; } catch (e) { } });
@@ -4080,10 +4133,10 @@ function joinLiveDialog(id) {
   const r = (db.liveReqs || []).find(x => x.id === id); if (!r) return;
   const already = r.createdBy === me.id || (r.watchers || []).includes(me.id), g = liveStage(r);
   const m = showModal(`✋ Läuft schon: ${esc(r.title)}`, `<div class="okbox">Prima – dann wird nichts doppelt angefragt.</div>${stagePill(r)}
-    <div class="wz-sum" style="margin-top:10px">${reqLines('liveReqs', r).map(([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}<div><span>Angefragt von</span><b>${esc(reqBy(r))}</b></div></div>
+    <div class="wz-sum" style="margin-top:8px">${reqLines('liveReqs', r).map(([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}<div><span>Angefragt von</span><b>${esc(reqBy(r))}</b></div></div>
     ${g.st && g.st.playerUrl ? `<div class="toolbar">${playerChip('streams', g.st)}</div>` : ''}
     ${already ? '<div class="infobox">Du bekommst bereits Updates zu diesem Live-Stream.</div>' : ''}
-    <label class="muted" style="font-size:12px;display:block;margin-top:8px">Zusätzlicher Wunsch (optional, z. B. „brauchen auch 9:16 Clips“)</label><textarea class="input" id="ljNote" rows="3" style="margin-top:4px"></textarea>`,
+    <label class="muted" style="font-size:0.75rem;display:block;margin-top:8px">Zusätzlicher Wunsch (optional, z. B. „brauchen auch 9:16 Clips“)</label><textarea class="input" id="ljNote" rows="3" style="margin-top:4px"></textarea>`,
     `<button class="btn" data-m="close">Schließen</button><button class="btn primary" id="ljGo">${already ? 'Wunsch senden' : '✋ Brauche ich auch – Updates bekommen'}</button>`, 'small');
   $('#ljGo', m).addEventListener('click', () => {
     const note = $('#ljNote', m).value.trim(), fresh = db.liveReqs.find(x => x.id === id);
@@ -4096,7 +4149,7 @@ function liveReqOpts(rec) {
   const o = { buttons: [] };
   if (!rec.id) return o;
   const g = liveStage(rec);
-  o.info = `${stagePill(rec)}<div style="margin-top:6px">${g.i < 0 ? `✕ <b>Abgelehnt</b>${rec.prodNote ? ': ' + esc(rec.prodNote) : ''}` : `📡 <b>${esc(g.label)}</b> · angefragt von ${esc(reqBy(rec))}${(rec.watchers || []).length ? ` · ✋ auch: ${rec.watchers.map(u => esc(userName(u))).join(', ')}` : ''}${rec.prodNote ? `<br>💬 ${esc(rec.prodNote)}` : ''}`}</div>`;
+  o.info = `${stagePill(rec)}<div style="margin-top:8px">${g.i < 0 ? `✕ <b>Abgelehnt</b>${rec.prodNote ? ': ' + esc(rec.prodNote) : ''}` : `📡 <b>${esc(g.label)}</b> · angefragt von ${esc(reqBy(rec))}${(rec.watchers || []).length ? ` · ✋ auch: ${rec.watchers.map(u => esc(userName(u))).join(', ')}` : ''}${rec.prodNote ? `<br>💬 ${esc(rec.prodNote)}` : ''}`}</div>`;
   if (g.st && g.st.playerUrl) o.buttons.push({ label: '▶ Player', cls: 'primary', onClick: () => playerDialog('streams', g.st.id) });
   if (techView() && can.edit()) {
     if (!rec.streamId && g.i >= 0) { o.buttons.push({ label: '✕ Ablehnen', onClick: r => { closeModal(); rejectLiveReq(r.id); } }); o.buttons.push({ label: '✅ Als Stream anlegen', cls: 'primary', onClick: r => { closeModal(); streamFromLiveReq(r.id); } }); }
@@ -4116,7 +4169,7 @@ function rejectLiveReq(id) {
   const r = (db.liveReqs || []).find(x => x.id === id); if (!r) return;
   const dup = similarLive(r).find(x => x.score >= 0.6);
   const quick = [...(dup ? [`Läuft schon: „${dup.rec.title || dup.rec.name}“ – bitte dort anhängen.`] : []), 'Keine Rechte / kein Signal verfügbar.', 'Zu der Zeit ist keine CUBA frei.'];
-  const m = showModal(`✕ Live-Anfrage ablehnen: ${esc(r.title)}`, `<label class="muted" style="font-size:12px">Kurze Begründung</label><textarea class="input" id="lrN" rows="3" style="margin-top:4px"></textarea><div class="pq-quick" style="margin-top:8px">${quick.map(q => `<span class="chip" data-q="${esc(q)}">${esc(q)}</span>`).join('')}</div>`, '<button class="btn" data-m="close">Abbrechen</button><button class="btn danger" id="lrGo">Ablehnen</button>', 'small');
+  const m = showModal(`✕ Live-Anfrage ablehnen: ${esc(r.title)}`, `<label class="muted" style="font-size:0.75rem">Kurze Begründung</label><textarea class="input" id="lrN" rows="3" style="margin-top:4px"></textarea><div class="pq-quick" style="margin-top:8px">${quick.map(q => `<span class="chip" data-q="${esc(q)}">${esc(q)}</span>`).join('')}</div>`, '<button class="btn" data-m="close">Abbrechen</button><button class="btn danger" id="lrGo">Ablehnen</button>', 'small');
   m.addEventListener('click', e => { const q = e.target.closest('[data-q]'); if (q) $('#lrN', m).value = q.dataset.q; });
   $('#lrGo', m).addEventListener('click', () => { saveRecord('liveReqs', { ...r, status: 'Abgelehnt', prodNote: $('#lrN', m).value.trim(), _force: true }, false); closeModal(); toast('Live-Anfrage abgelehnt – die Redaktion sieht die Begründung.', 'ok'); render(); });
 }
@@ -4133,7 +4186,7 @@ function liveReqBoard() {
   const active = all.filter(r => r.status !== 'Abgelehnt'), rej = all.filter(r => r.status === 'Abgelehnt' && (r.createdBy === me.id || techView()));
   return `<div class="infobox">Hier siehst du <b>alle laufenden Live-Stream-Anfragen</b> – bevor du etwas neu anfragst, kurz schauen, ob es schon dabei ist. Mit „✋ Brauche ich auch“ bekommst du Updates und den Player, ohne doppelt anzufragen.</div>
     <div class="lr-list">${active.map(r => liveReqItem(r)).join('') || '<div class="card"><div class="empty">Keine laufenden Live-Stream-Anfragen.</div></div>'}</div>
-    ${rej.length ? `<h3 style="font-size:13px;margin:16px 0 6px" class="muted">Abgelehnt</h3><div class="lr-list">${rej.map(r => liveReqItem(r)).join('')}</div>` : ''}`;
+    ${rej.length ? `<h3 style="font-size:0.875rem;margin:16px 0 8px" class="muted">Abgelehnt</h3><div class="lr-list">${rej.map(r => liveReqItem(r)).join('')}</div>` : ''}`;
 }
 function liveReqView() {
   return `<div class="toolbar">${tabsHtml('streams', STREAM_TABS())}${streamMenuHtml()}<span class="spacer"></span><button class="btn" data-act="wiz" data-type="Live-Stream">📡 Live-Stream anfragen</button></div>${liveReqBoard()}`;
@@ -4149,7 +4202,7 @@ function redDashboard(main) {
     return `<div class="rd-prod ${now ? 'now' : ''} ${past ? 'past' : ''}" data-act="open" data-coll="bookings" data-id="${b.id}"><div class="rd-time">${b.allDay ? 'ganzt.' : esc(b.start)}<small>${b.allDay ? '' : esc(b.end || '')}</small></div><i class="rd-bar" style="background:${s.color}"></i><div style="flex:1;min-width:0"><div class="rd-t">${esc(b.title)}${newCell(b)}</div><div class="rd-tags"><span class="rd-tag" style="--c:${s.color}">${esc(s.name)}</span>${b.type === 'Dreh' ? '<span class="rd-tag">🎥 Dreh</span>' : ''}${b.live ? '<span class="rd-tag live">🔴 Live</span>' : ''}${b.needsMakeup ? '<span class="rd-tag">💄 Maske</span>' : ''}${now ? '<span class="rd-tag on">● läuft gerade</span>' : ''}</div></div></div>`; };
   const on = cutters().map(p => ({ p, sh: shiftOf(p.id, T) })).filter(x => x.sh).sort((a, b) => freeOn(b.p.id, T) - freeOn(a.p.id, T));
   const cutTile = ({ p, sh }) => { const free = freeOn(p.id, T), load = loadOn(p.id, T), pct = Math.min(100, load / postHours() * 100), cur = db.edits.filter(e => e.staffId === p.id && isActiveEdit(e) && editOnDay(e, T))[0];
-    return `<div class="rd-cut"><div class="rd-av" style="background:${avColor(p.name)}">${initials(p.name.replace(/\s*\(Demo\)/, ''))}</div><div style="flex:1;min-width:0"><div class="rd-t">${esc(p.name.replace(/\s*\(Demo\)/, ''))} <span class="muted" style="font-weight:400;font-size:12px">${shiftRangeOf(sh)}</span></div><div class="rd-meter"><i style="width:${pct}%;background:${free >= 3 ? 'var(--ok)' : free > 0 ? 'var(--warn)' : 'var(--bad)'}"></i></div><div class="sub">${cur ? '✂️ ' + esc(cur.title) : 'gerade nichts zugeteilt'}</div></div><span class="rd-free ${free >= 3 ? 'ok' : free > 0 ? 'mid' : 'full'}">${free > 0 ? fmtH(free) + ' frei' : 'voll'}</span></div>`; };
+    return `<div class="rd-cut"><div class="rd-av" style="background:${avColor(p.name)}">${initials(p.name.replace(/\s*\(Demo\)/, ''))}</div><div style="flex:1;min-width:0"><div class="rd-t">${esc(p.name.replace(/\s*\(Demo\)/, ''))} <span class="muted" style="font-weight:400;font-size:0.75rem">${shiftRangeOf(sh)}</span></div><div class="rd-meter"><i style="width:${pct}%;background:${free >= 3 ? 'var(--ok)' : free > 0 ? 'var(--warn)' : 'var(--bad)'}"></i></div><div class="sub">${cur ? '✂️ ' + esc(cur.title) : 'gerade nichts zugeteilt'}</div></div><span class="rd-free ${free >= 3 ? 'ok' : free > 0 ? 'mid' : 'full'}">${free > 0 ? fmtH(free) + ' frei' : 'voll'}</span></div>`; };
   const lr = (db.liveReqs || []).filter(r => r.status !== 'Abgelehnt' && (r.until || r.date) >= T).sort((a, b) => (a.date + (a.start || '')).localeCompare(b.date + (b.start || ''))).slice(0, 5);
   const cfg = mkCfg(), from = tmin(cfg.open), to = tmin(cfg.close);
   const nextFree = d => { const items = mkLoadItems(d, true); for (let t = Math.max(from, d === T ? Math.ceil(nm / 15) * 15 : from); t < to; t += 15) if (mkCountAt(items, t) < cfg.capacity) return mint(t); return null; };
@@ -4169,8 +4222,8 @@ function redDashboard(main) {
     <div class="rd-grid">
       <div class="rd-card"><div class="rd-h"><span>🎬</span><b>Heute im Haus</b><em>${bk.length}</em></div>${bk.map(prodRow).join('') || '<div class="empty">Heute keine Produktionen.</div>'}</div>
       <div class="rd-card"><div class="rd-h"><span>✂️</span><b>Cutter heute</b><em>${on.length}</em><button class="btn small" data-act="go" data-view="post">Alle</button></div>${on.map(cutTile).join('') || '<div class="empty">Heute ist niemand im Schnitt.</div>'}<div class="rd-foot"><button class="btn small primary" data-act="wiz" data-type="Schnitt">✂️ Schnitt anfragen</button></div></div>
-      <div class="rd-card"><div class="rd-h"><span>📡</span><b>Live-Streams – angefragt & geplant</b><em>${lr.length}</em><button class="btn small" data-act="goReq" data-tab="live">Alle</button></div><div class="lr-list compact">${lr.map(r => liveReqItem(r, true)).join('') || '<div class="empty">Keine Live-Stream-Anfragen. Kommt ein Termin wie ein Parteitag rein? Einfach anfragen.</div>'}</div><div class="rd-foot"><span class="muted" style="font-size:12px">Erst schauen, ob es schon angefragt ist – dann „✋ Brauche ich auch“.</span><button class="btn small primary" data-act="wiz" data-type="Live-Stream">📡 Live-Stream anfragen</button></div></div>
-      <div class="rd-card"><div class="rd-h"><span>💄</span><b>Maske – freie Zeiten</b></div><div class="muted" style="font-size:12px;margin-bottom:6px">Grün = frei · Gelb = teilweise · Rot = voll. <b>In die Leiste tippen</b> = Maske zu dieser Uhrzeit anfragen.</div>${mkRow(T, 'Heute')}${mkRow(addDays(T, 1), 'Morgen')}${mkRow(addDays(T, 2), WDL[parseISO(addDays(T, 2)).getDay()])}<div class="rd-foot"><button class="btn small primary" data-act="wiz" data-type="Maske">💄 Maske anfragen</button></div></div>
+      <div class="rd-card"><div class="rd-h"><span>📡</span><b>Live-Streams – angefragt & geplant</b><em>${lr.length}</em><button class="btn small" data-act="goReq" data-tab="live">Alle</button></div><div class="lr-list compact">${lr.map(r => liveReqItem(r, true)).join('') || '<div class="empty">Keine Live-Stream-Anfragen. Kommt ein Termin wie ein Parteitag rein? Einfach anfragen.</div>'}</div><div class="rd-foot"><span class="muted" style="font-size:0.75rem">Erst schauen, ob es schon angefragt ist – dann „✋ Brauche ich auch“.</span><button class="btn small primary" data-act="wiz" data-type="Live-Stream">📡 Live-Stream anfragen</button></div></div>
+      <div class="rd-card"><div class="rd-h"><span>💄</span><b>Maske – freie Zeiten</b></div><div class="muted" style="font-size:0.75rem;margin-bottom:8px">Grün = frei · Gelb = teilweise · Rot = voll. <b>In die Leiste tippen</b> = Maske zu dieser Uhrzeit anfragen.</div>${mkRow(T, 'Heute')}${mkRow(addDays(T, 1), 'Morgen')}${mkRow(addDays(T, 2), WDL[parseISO(addDays(T, 2)).getDay()])}<div class="rd-foot"><button class="btn small primary" data-act="wiz" data-type="Maske">💄 Maske anfragen</button></div></div>
       ${camCard()}
       <div class="rd-card"><div class="rd-h"><span>📋</span><b>Meine Anfragen</b><em>${mine.length}</em></div>${mine.map(x => `<div class="rd-mine" data-act="open" data-coll="${x.coll}" data-id="${x.id}"><span>${x.ic}</span><div style="flex:1;min-width:0"><div class="rd-t">${esc(x.t)}</div><div class="sub">${x.d ? fmtShort(x.d) : ''}</div></div><span class="badge ${x.cls || ''}">${esc(x.st)}</span></div>`).join('') || '<div class="empty">Noch keine offenen Anfragen.</div>'}</div>
     </div>`;
@@ -4212,7 +4265,7 @@ function camCard() {
   const slots = ['09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
   return `<div class="rd-card"><div class="rd-h"><span>🎥</span><b>Tageskamera heute</b><em>${on.length}</em><button class="btn small" data-act="goReq" data-tab="cam">Woche</button></div>
     ${on.length ? `<div class="cam-slots">${slots.map(t => { const n = camAvail(T, t, mint(tmin(t) + 60)).free.length; return `<button class="cam-slot ${n ? 'ok' : 'full'}" ${n ? `data-act="camAsk" data-date="${T}" data-time="${t}"` : 'disabled'} title="${n} frei"><b>${t}</b><small>${n ? n + ' frei' : 'belegt'}</small></button>`; }).join('')}</div>` : '<div class="empty">Heute ist keine Tageskamera eingeplant.</div>'}
-    <div class="rd-foot"><span class="muted" style="font-size:12px">Uhrzeit antippen = Kamera zu dieser Zeit anfragen</span><button class="btn small primary" data-act="wiz" data-type="Kamera">🎥 Kamera anfragen</button></div></div>`;
+    <div class="rd-foot"><span class="muted" style="font-size:0.75rem">Uhrzeit antippen = Kamera zu dieser Zeit anfragen</span><button class="btn small primary" data-act="wiz" data-type="Kamera">🎥 Kamera anfragen</button></div></div>`;
 }
 function camReqRow(r) {
   const p = staffById(r.staffId), av = r.start ? camAvail(r.date, r.start, r.end) : { free: [], onDuty: [] };
@@ -4221,14 +4274,14 @@ function camReqRow(r) {
 function camBoard() {
   const T = today(), D = state.date.requests < T ? T : state.date.requests, ws = startOfWeek(D), days = [...Array(7)].map((_, i) => addDays(ws, i));
   const mine = (db.camReqs || []).filter(r => can.edit() ? r.date >= addDays(T, -1) : r.createdBy === me.id).sort(byDate);
-  let html = `<div class="toolbar">${dateNav('requests', weekLabel(ws), 'week')}<span class="spacer"></span><span class="muted" style="font-size:12px">${can.edit() ? 'Zelle antippen = Dienst an/aus · 🎥 = eingeplant' : 'Wie viele Tageskameras sind wann frei?'}</span></div>`;
-  html += `<div class="matrix" style="grid-template-columns:190px repeat(7,minmax(118px,1fr));margin-bottom:14px"><div class="mhd who">Tageskamera</div>${days.map(d => `<div class="mhd ${d === T ? 'today' : ''}">${WD[parseISO(d).getDay()]} ${fmtDate(d).slice(0, 6)}</div>`).join('')}`;
+  let html = `<div class="toolbar">${dateNav('requests', weekLabel(ws), 'week')}<span class="spacer"></span><span class="muted" style="font-size:0.75rem">${can.edit() ? 'Zelle antippen = Dienst an/aus · 🎥 = eingeplant' : 'Wie viele Tageskameras sind wann frei?'}</span></div>`;
+  html += `<div class="matrix" style="grid-template-columns:190px repeat(7,minmax(118px,1fr));margin-bottom:16px"><div class="mhd who">Tageskamera</div>${days.map(d => `<div class="mhd ${d === T ? 'today' : ''}">${WD[parseISO(d).getDay()]} ${fmtDate(d).slice(0, 6)}</div>`).join('')}`;
   if (can.edit()) camStaff().forEach(p => {
     html += `<div class="who">${esc(p.name)}<small>${esc(p.employment || '')}${p.skills ? ' · ' + esc(p.skills) : ''}</small></div>`;
-    days.forEach(d => { const on = camOnDuty(p.id, d), jobs = camJobs(p.id, d); html += `<div class="cell ${on ? '' : 'off'}" data-act="camDuty" data-staff="${p.id}" data-date="${d}" style="cursor:pointer">${on ? '<div><span class="shiftchip" style="background:#86efac">im Dienst</span></div>' : '<div class="muted" style="font-size:11px">–</div>'}${jobs.map(a => `<div class="achip" data-act="open" data-coll="assignments" data-id="${a.id}">🎥 ${esc(a.start || '')} ${esc(a.production)}</div>`).join('')}</div>`; });
+    days.forEach(d => { const on = camOnDuty(p.id, d), jobs = camJobs(p.id, d); html += `<div class="cell ${on ? '' : 'off'}" data-act="camDuty" data-staff="${p.id}" data-date="${d}" style="cursor:pointer">${on ? '<div><span class="shiftchip" style="background:#86efac">im Dienst</span></div>' : '<div class="muted" style="font-size:0.75rem">–</div>'}${jobs.map(a => `<div class="achip" data-act="open" data-coll="assignments" data-id="${a.id}">🎥 ${esc(a.start || '')} ${esc(a.production)}</div>`).join('')}</div>`; });
   });
   html += `<div class="who"><b>Verfügbar</b><small>im Dienst · noch frei (ganztägig)</small></div>`;
-  days.forEach(d => { const on = camStaff().filter(p => camOnDuty(p.id, d)); const freeAll = on.filter(p => !camJobs(p.id, d).length).length; html += `<div class="cell" style="cursor:${on.length ? 'pointer' : 'default'}" ${on.length ? `data-act="camAsk" data-date="${d}" data-time=""` : ''}><div style="font-size:18px;font-weight:800;color:${on.length ? '#86efac' : 'var(--muted)'}">${on.length}</div><div class="muted" style="font-size:11px">${on.length ? `${freeAll} ohne Termin` : 'keine'}</div></div>`; });
+  days.forEach(d => { const on = camStaff().filter(p => camOnDuty(p.id, d)); const freeAll = on.filter(p => !camJobs(p.id, d).length).length; html += `<div class="cell" style="cursor:${on.length ? 'pointer' : 'default'}" ${on.length ? `data-act="camAsk" data-date="${d}" data-time=""` : ''}><div style="font-size:1.25rem;font-weight:800;color:${on.length ? '#86efac' : 'var(--muted)'}">${on.length}</div><div class="muted" style="font-size:0.75rem">${on.length ? `${freeAll} ohne Termin` : 'keine'}</div></div>`; });
   html += `</div>`;
   html += `<div class="card"><h3>${can.edit() ? '📨 Kamera-Anfragen' : '📋 Meine Kamera-Anfragen'} <span class="badge ${openCamReqs().length && can.edit() ? 'new' : ''}">${mine.length}</span></h3>${mine.map(camReqRow).join('') || '<div class="empty">Keine Kamera-Anfragen.</div>'}</div>`;
   if (can.edit() && !camStaff().length) html = `<div class="infobox">Noch keine Tageskameras angelegt – „+ Tageskamera anlegen“ oder unter Personal mit Gewerk „Tageskamera“.</div>` + html;
@@ -4238,7 +4291,7 @@ function camConfirmDialog(id) {
   const r = (db.camReqs || []).find(x => x.id === id); if (!r) return;
   const av = camAvail(r.date, r.start, r.end || mint(tmin(r.start) + 60));
   let pick = (av.free[0] || {}).id || '';
-  const m = showModal(`🎥 Kamera zuteilen · ${esc(r.title)}`, `<div class="infobox">${esc(r.kind)} · ${fmtShort(r.date)} ${esc(r.start)}–${esc(r.end || '')} · ${esc(r.place || '')} · von ${esc(reqBy(r))}</div><div class="pq-cut" id="ccList"></div><label class="muted" style="font-size:12px;display:block;margin-top:10px">Nachricht an die Redaktion (optional)</label><textarea class="input" id="ccNote" rows="2" style="margin-top:4px"></textarea>`,
+  const m = showModal(`🎥 Kamera zuteilen · ${esc(r.title)}`, `<div class="infobox">${esc(r.kind)} · ${fmtShort(r.date)} ${esc(r.start)}–${esc(r.end || '')} · ${esc(r.place || '')} · von ${esc(reqBy(r))}</div><div class="pq-cut" id="ccList"></div><label class="muted" style="font-size:0.75rem;display:block;margin-top:8px">Nachricht an die Redaktion (optional)</label><textarea class="input" id="ccNote" rows="2" style="margin-top:4px"></textarea>`,
     '<button class="btn" data-m="close">Abbrechen</button><button class="btn primary" id="ccGo">✅ Zuteilen & bestätigen</button>', 'small');
   const draw = () => { $('#ccList', m).innerHTML = av.onDuty.map(p => { const busy = !av.free.includes(p), jobs = camJobs(p.id, r.date); return `<button type="button" class="pq-card ${pick === p.id ? 'sel' : ''} ${busy ? 'full' : 'ok'}" data-ccp="${p.id}"><span><b>${esc(p.name)}</b></span><small>${busy ? '⛔ belegt' : '✅ frei'}${jobs.length ? ' · ' + jobs.length + ' Termin' + (jobs.length > 1 ? 'e' : '') : ''}</small></button>`; }).join('') || '<div class="warnbox">An diesem Tag ist keine Tageskamera im Dienst. Bitte zuerst den Dienst eintragen.</div>'; };
   draw();
@@ -4286,7 +4339,7 @@ function privReqOpts(coll, rec) {
 function privReject(coll, id) {
   const r = (db[coll] || []).find(x => x.id === id); if (!r) return;
   const quick = coll === 'camReqs' ? ['Zu der Zeit ist leider keine Tageskamera frei – geht es eine Stunde später?', 'Bitte kurz telefonisch abstimmen.'] : ['An dem Tag haben wir keine Crew frei – Alternativtermin?', 'Bitte kurz telefonisch abstimmen.'];
-  const m = showModal(`✕ Anfrage ablehnen: ${esc(r.title)}`, `<label class="muted" style="font-size:12px">Kurze Begründung / Alternative</label><textarea class="input" id="prN" rows="3" style="margin-top:4px"></textarea><div class="pq-quick" style="margin-top:8px">${quick.map(q => `<span class="chip" data-q="${esc(q)}">${esc(q)}</span>`).join('')}</div>`, '<button class="btn" data-m="close">Abbrechen</button><button class="btn danger" id="prGo">Ablehnen</button>', 'small');
+  const m = showModal(`✕ Anfrage ablehnen: ${esc(r.title)}`, `<label class="muted" style="font-size:0.75rem">Kurze Begründung / Alternative</label><textarea class="input" id="prN" rows="3" style="margin-top:4px"></textarea><div class="pq-quick" style="margin-top:8px">${quick.map(q => `<span class="chip" data-q="${esc(q)}">${esc(q)}</span>`).join('')}</div>`, '<button class="btn" data-m="close">Abbrechen</button><button class="btn danger" id="prGo">Ablehnen</button>', 'small');
   m.addEventListener('click', e => { const q = e.target.closest('[data-q]'); if (q) $('#prN', m).value = q.dataset.q; });
   $('#prGo', m).addEventListener('click', () => { saveRecord(coll, { ...r, status: 'Abgelehnt', prodNote: $('#prN', m).value.trim(), _force: true }, false); closeModal(); toast('Anfrage abgelehnt – die Redaktion sieht die Begründung.', 'ok'); render(); });
 }
@@ -4294,7 +4347,7 @@ function privReqTables(mineOnly) {
   const T = today();
   const cam = (db.camReqs || []).filter(r => (mineOnly ? r.createdBy === me.id : true) && r.date >= addDays(T, -14)).sort(byDate);
   const prod = (db.prodReqs || []).filter(r => (mineOnly ? r.createdBy === me.id : true) && r.date >= addDays(T, -14)).sort(byDate);
-  return `${cam.length ? `<div class="card" style="margin-top:14px"><h3>🎥 Kamera-Anfragen <span class="badge">${cam.length}</span></h3>${cam.map(camReqRow).join('')}</div>` : ''}${prod.length ? `<div class="card" style="margin-top:14px"><h3>🎙 Produktions-Anfragen <span class="badge">${prod.length}</span></h3>${prod.map(prodReqRow).join('')}</div>` : ''}`;
+  return `${cam.length ? `<div class="card" style="margin-top:16px"><h3>🎥 Kamera-Anfragen <span class="badge">${cam.length}</span></h3>${cam.map(camReqRow).join('')}</div>` : ''}${prod.length ? `<div class="card" style="margin-top:16px"><h3>🎙 Produktions-Anfragen <span class="badge">${prod.length}</span></h3>${prod.map(prodReqRow).join('')}</div>` : ''}`;
 }
 function newReqsCard() {
   const lr = openLiveReqs(), cr = openCamReqs(), pr = openProdReqs(), n = lr.length + cr.length + pr.length;
@@ -4333,8 +4386,8 @@ function hoCard(D) {
   return `<div class="card ho-card"><h3>📝 Übergabe ${D === T ? 'heute' : fmtShort(D)} <span class="badge">${list.length}</span></h3>
     ${list.map(item).join('') || '<div class="empty">Keine Einträge für diesen Tag.</div>'}
     <div class="ho-new"><textarea class="input" id="hoText" rows="2" placeholder="Was muss die nächste Schicht / das Team wissen?"></textarea>
-    <div class="toolbar" style="margin:6px 0 0"><label class="toggle" style="padding:0;font-size:12.5px"><input type="checkbox" id="hoPrio"> ⭐ Prio – bleibt sichtbar, bis erledigt</label><span class="spacer"></span><span class="muted" style="font-size:12px">für</span><input class="input" type="date" id="hoDate" value="${D}" style="width:150px"><button class="btn small primary" data-act="hoAdd">+ Eintrag</button></div></div>
-    <div class="muted" style="font-size:11.5px;margin-top:6px">Normale Einträge erscheinen nur am gewählten Tag (auch vorausplanbar als Erinnerung). Prio-Einträge bleiben ab ihrem Tag sichtbar, bis jemand „Erledigt“ klickt.</div></div>`;
+    <div class="toolbar" style="margin:8px 0 0"><label class="toggle" style="padding:0;font-size:0.875rem"><input type="checkbox" id="hoPrio"> ⭐ Prio – bleibt sichtbar, bis erledigt</label><span class="spacer"></span><span class="muted" style="font-size:0.75rem">für</span><input class="input" type="date" id="hoDate" value="${D}" style="width:150px"><button class="btn small primary" data-act="hoAdd">+ Eintrag</button></div></div>
+    <div class="muted" style="font-size:0.75rem;margin-top:8px">Normale Einträge erscheinen nur am gewählten Tag (auch vorausplanbar als Erinnerung). Prio-Einträge bleiben ab ihrem Tag sichtbar, bis jemand „Erledigt“ klickt.</div></div>`;
 }
 /* ---------- Erinnerungen (Sammelübersicht) ---------- */
 function reminders(D, days = 7) {
@@ -4355,7 +4408,7 @@ function remCard(D) {
   const lbl = d => d === T ? 'Heute' : d === addDays(T, 1) ? 'Morgen' : `${WDL[parseISO(d).getDay()]}, ${fmtDate(d).slice(0, 6)}`;
   return `<div class="card rem-card vp-wide"><h3>⏰ Erinnerungen – nächste 7 Tage <span class="badge ${list.some(x => x.cls === 'warn' && x.date <= addDays(T, 1)) ? 'warn' : ''}">${list.length}</span></h3>
     ${days.map(d => `<div class="rem-day"><div class="rem-dh">${lbl(d)}</div>${list.filter(x => x.date === d).map(x => `<div class="rem-item ${x.cls}" ${x.coll ? `data-act="open" data-coll="${x.coll}" data-id="${x.id}"` : ''}><span class="rem-time">${esc(x.time || '')}</span><span class="rem-ic">${x.ic}</span><div style="flex:1;min-width:0"><div class="rem-t">${esc(x.title)}</div><div class="sub">${esc(x.sub)}</div></div></div>`).join('')}</div>`).join('') || '<div class="empty">Nichts Besonderes in den nächsten Tagen.</div>'}
-    <div class="muted" style="font-size:11.5px;margin-top:6px">Automatisch aus Tests, Drehs, Tageskamera-Einsätzen, Schnitt-Abgaben, offenen Signalwegen, Hinweistagen und vorausgeplanten Übergabe-Notizen.</div></div>`;
+    <div class="muted" style="font-size:0.75rem;margin-top:8px">Automatisch aus Tests, Drehs, Tageskamera-Einsätzen, Schnitt-Abgaben, offenen Signalwegen, Hinweistagen und vorausgeplanten Übergabe-Notizen.</div></div>`;
 }
 /* ---------- Anfragen zu bearbeiten (alle Arten) ---------- */
 function prodReqCard() {
@@ -4377,9 +4430,9 @@ function sinceCard() {
   const rows = colls.flatMap(c => (db[c] || []).filter(r => newState(r) && visibleRec(c, r)).map(r => ({ c, r, st: newState(r) }))).sort((a, b) => b.r.updatedAt - a.r.updatedAt);
   const byColl = colls.map(c => { const l = rows.filter(x => x.c === c); return l.length ? `${l.length}× ${COLL_NAME[c]}` : ''; }).filter(Boolean);
   return `<div class="card"><h3>🔔 Seit deinem letzten Besuch <span class="badge">${rows.length}</span></h3>
-    ${rows.length ? `<div class="muted" style="font-size:12.5px;margin-bottom:6px">Von Kolleg*innen neu angelegt oder geändert: ${esc(byColl.join(' · '))}</div>` : ''}
+    ${rows.length ? `<div class="muted" style="font-size:0.875rem;margin-bottom:8px">Von Kolleg*innen neu angelegt oder geändert: ${esc(byColl.join(' · '))}</div>` : ''}
     ${rows.slice(0, 7).map(x => `<div class="list-row" data-act="open" data-coll="${x.c}" data-id="${x.r.id}"><div class="time"><span class="pill ${x.st === 'NEU' ? 'pnew' : 'pchg'}">${x.st === 'NEU' ? 'neu' : 'geändert'}</span></div><div style="min-width:0"><div>${esc(recTitle(x.c, x.r))}</div><div class="sub">${COLL_NAME[x.c]} · ${esc(userName(x.r.updatedBy))} · ${fmtTs(x.r.updatedAt)}</div></div></div>`).join('') || '<div class="empty">Keine Änderungen – du bist auf dem neuesten Stand.</div>'}
-    ${rows.length ? `<div class="toolbar" style="margin:8px 0 0">${rows.length > 7 ? `<span class="muted" style="font-size:12px">+ ${rows.length - 7} weitere (🔔 oben rechts)</span>` : ''}<span class="spacer"></span><button class="btn small" data-act="bellSeen">✓ Alles gesehen</button></div>` : ''}</div>`;
+    ${rows.length ? `<div class="toolbar" style="margin:8px 0 0">${rows.length > 7 ? `<span class="muted" style="font-size:0.75rem">+ ${rows.length - 7} weitere (🔔 oben rechts)</span>` : ''}<span class="spacer"></span><button class="btn small" data-act="bellSeen">✓ Alles gesehen</button></div>` : ''}</div>`;
 }
 function prodDashboard(main) {
   if (!state.date.dash) state.date.dash = today();
@@ -4392,7 +4445,7 @@ function prodDashboard(main) {
   const mk = db.makeup.filter(m => m.date === D).sort((a, b) => a.start.localeCompare(b.start));
   const nReq = actionCount('requests'), noCut = db.edits.filter(e => isActiveEdit(e) && !e.staffId).length, sigOpen = stD.filter(s => !techStatus(s).sig).length;
   const hints = db.streams.filter(s => s.kind === 'Hinweistag' && s.date === D);
-  main.innerHTML = `<div class="toolbar">${dateNav('dash', `${WDL[parseISO(D).getDay()]}, ${fmtDate(D)}`, 'day')}<span class="spacer"></span><span class="muted" style="font-size:12px">Rote Zahl = zu erledigen · ● = neu/geändert seit deinem letzten Besuch</span></div>
+  main.innerHTML = `<div class="toolbar">${dateNav('dash', `${WDL[parseISO(D).getDay()]}, ${fmtDate(D)}`, 'day')}<span class="spacer"></span><span class="muted" style="font-size:0.75rem">Rote Zahl = zu erledigen · ● = neu/geändert seit deinem letzten Besuch</span></div>
     ${hints.map(h => `<div class="warnbox">⚠️ <b>${esc(h.name)}</b> ${esc(h.notes || '')}</div>`).join('')}
     <div class="kpis">
       <div class="kpi ${nReq ? 'hot' : ''}" data-act="goReq" data-tab="open"><b>${nReq}</b><span>📨 Anfragen zu bearbeiten</span></div>
@@ -4405,7 +4458,7 @@ function prodDashboard(main) {
       ${hoCard(D)}
       ${prodReqCard()}
       ${remCard(D)}
-      <div class="card"><h3>🎬 Studio ${dl} <span class="badge">${bk.length}</span></h3>${bk.map(b => row(b.allDay ? 'ganztägig' : `${b.start}–${b.end}`, b.title, `<i class="sw" style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${studioById(b.studioId).color}"></i> ${esc(studioById(b.studioId).name)}${b.type !== 'Produktion' ? ' · ' + esc(b.type) : ''}${b.needsMakeup ? ' · 💄' : ''}${b.live && !isBlock(b.type) ? ' · ' + liveChip(b) : ''}`, 'bookings', b)).join('') || '<div class="empty">Keine Studio-Termine.</div>'}</div>
+      <div class="card"><h3>🎬 Studio ${dl} <span class="badge">${bk.length}</span></h3>${bk.map(b => row(b.allDay ? 'ganztägig' : `${b.start}–${b.end}`, b.title, `<i class="sw" style="display:inline-block;width:8px;height:8px;border-radius:4px;background:${studioById(b.studioId).color}"></i> ${esc(studioById(b.studioId).name)}${b.type !== 'Produktion' ? ' · ' + esc(b.type) : ''}${b.needsMakeup ? ' · 💄' : ''}${b.live && !isBlock(b.type) ? ' · ' + liveChip(b) : ''}`, 'bookings', b)).join('') || '<div class="empty">Keine Studio-Termine.</div>'}</div>
       <div class="card"><h3>📡 Streams ${dl} & am Folgetag <span class="badge">${st.length}</span></h3>${st.map(s => s.kind === 'Hinweistag' ? row(fmtShort(s.date), '⚠️ ' + s.name, esc(s.notes || ''), 'streams', s) : row(`${s.date === D ? (D === T ? 'Heute' : fmtShort(D)) : 'Folgetag'} ${s.start || ''}`, s.name, `${routeChips(s)} ${recChip(s)}`, 'streams', s)).join('') || '<div class="empty">Keine Streams.</div>'}</div>
       <div class="card"><h3>💄 Maske ${dl} <span class="badge">${mk.length}</span></h3>${mk.map(m => row(`${m.start}–${mkEnd(m)}`, m.talent || m.kind, `${esc(m.gender || '')} · ${esc(m.kind)} · ${esc((m.location || '').split(' – ')[0])}${m.production ? ' · ' + esc(m.production) : ''}`, 'makeup', m)).join('') || '<div class="empty">Keine Masken-Slots.</div>'}</div>
       ${postTodayCard()}
@@ -4463,7 +4516,7 @@ function mkDayDialog(date) {
   const c = mkCfgD(date), base = mkCfg(), o = (db.mkDays || {})[date];
   const m = showModal(`💄 Maske · ${WDL[parseISO(date).getDay()]}, ${fmtDate(date)}`, `<div class="infobox">Standard: ${base.open}–${base.close}, ${base.capacity} gleichzeitig. Abweichungen gelten nur für diesen Tag – die Redaktion sieht die freien Zeiten sofort entsprechend.</div>
     <div class="pq-row"><span class="muted">besetzt</span><input class="input" type="time" step="900" id="mdO" value="${c.open}"><span class="muted">bis</span><input class="input" type="time" step="900" id="mdC" value="${c.close}"><span class="muted">gleichzeitig</span><input class="input" type="number" min="0" id="mdK" value="${c.capacity}" style="width:70px"></div>
-    <input class="input" id="mdN" placeholder="Hinweis, z. B. Sonderformat – zusätzliche Maskenbildnerin" value="${esc((o && o.note) || '')}" style="width:100%;margin-top:10px">`,
+    <input class="input" id="mdN" placeholder="Hinweis, z. B. Sonderformat – zusätzliche Maskenbildnerin" value="${esc((o && o.note) || '')}" style="width:100%;margin-top:8px">`,
     `${o ? '<button class="btn left" id="mdR">↺ Standard</button>' : '<span class="left"></span>'}<button class="btn" data-m="close">Abbrechen</button><button class="btn primary" id="mdGo">Speichern</button>`, 'small');
   $('#mdGo', m).addEventListener('click', () => { db.mkDays = db.mkDays || {}; db.mkDays[date] = { open: $('#mdO', m).value || base.open, close: $('#mdC', m).value || base.close, capacity: Math.max(0, +$('#mdK', m).value || 0), note: $('#mdN', m).value.trim() }; persist(); closeModal(); toast('💄 Maskenzeiten für diesen Tag gespeichert', 'ok'); render(); });
   if (o) $('#mdR', m).addEventListener('click', () => { delete db.mkDays[date]; persist(); closeModal(); render(); });
@@ -4486,12 +4539,12 @@ function w_onduty(D) {
   return `<div class="card"><h3>👥 Wer ist ${D === T ? 'heute' : 'am ' + fmtShort(D)} da?${can.edit() ? `<button class="btn small" style="margin-left:auto" data-act="dayTimes" data-date="${D}">🕐 Zeiten anpassen</button>` : ''}</h3>
     <div class="od-scale"><span></span><div>${hrs.join('')}</div></div>
     ${grps.map(g => `<div class="od-grp">${g}</div>${rows.filter(r => r.grp === g).map(r => { const a = tmin(r.s), b = endMin(r.s, r.e); const now = D === T && a <= nm && nm < b; return `<div class="od-row ${r.act ? 'click' : ''}" ${r.act}><div class="od-name ${now ? 'now' : ''}" title="${esc(r.name)}">${esc(r.name.replace(/\s*\(Demo\)/, ''))}${r.tag ? ` <small>${esc(r.tag)}</small>` : ''}</div><div class="od-track"><i class="od-bar ${r.cls} ${r.custom ? 'custom' : ''}" style="left:${pct(a)}%;width:${pct(b) - pct(a)}%" title="${esc(r.s + '–' + r.e + (r.note ? ' · ' + r.note : ''))}">${esc(r.s)}–${esc(r.e)}</i>${D === T && nm > from && nm < to ? `<b class="od-now" style="left:${pct(nm)}%"></b>` : ''}</div></div>${r.note ? `<div class="od-note">↳ ${esc(r.note)}</div>` : ''}`; }).join('')}`).join('')}
-    <div class="muted" style="font-size:11.5px;margin-top:6px">Gestrichelt = abweichende Zeit an diesem Tag.${can.edit() ? ' Zeile anklicken = Zeit ändern.' : ''}</div></div>`;
+    <div class="muted" style="font-size:0.75rem;margin-top:8px">Gestrichelt = abweichende Zeit an diesem Tag.${can.edit() ? ' Zeile anklicken = Zeit ändern.' : ''}</div></div>`;
 }
 function dayTimesDialog(D) {
   const rows = [...cutters(), ...camStaff()].map(p => ({ p, sh: shiftOf(p.id, D) })).filter(x => x.sh);
   const c = mkCfgD(D);
-  const m = showModal(`🕐 Zeiten · ${WDL[parseISO(D).getDay()]}, ${fmtDate(D)}`, `<div class="muted" style="font-size:12px;margin-bottom:8px">Alle Zeiten dieses Tages auf einen Blick – z. B. für Sonderformate. Weitere Personen über den Dienstplan (Schnitt → Wer ist wann da? / Anfragen → Kamera).</div>
+  const m = showModal(`🕐 Zeiten · ${WDL[parseISO(D).getDay()]}, ${fmtDate(D)}`, `<div class="muted" style="font-size:0.75rem;margin-bottom:8px">Alle Zeiten dieses Tages auf einen Blick – z. B. für Sonderformate. Weitere Personen über den Dienstplan (Schnitt → Wer ist wann da? / Anfragen → Kamera).</div>
     <table class="mvtab"><tr><th>Wer</th><th>von</th><th>bis</th><th>Hinweis</th></tr>
     ${rows.map(({ p, sh }) => { const t = dutyTimes(sh); return `<tr data-dt="${sh.id}"><td>${esc(p.name)} <span class="muted">${p.dept === 'Cutter' ? sh.code : 'Kamera'}</span></td><td><input class="input" type="time" step="900" data-k="s" value="${t.start}"></td><td><input class="input" type="time" step="900" data-k="e" value="${t.end}"></td><td><input class="input" data-k="n" value="${esc(sh.note || '')}"></td></tr>`; }).join('')}
     <tr data-dt="mk"><td>💄 Maske <span class="muted">· <input class="input" type="number" min="0" data-k="c" value="${c.capacity}" style="width:56px"> gleichz.</span></td><td><input class="input" type="time" step="900" data-k="s" value="${c.open}"></td><td><input class="input" type="time" step="900" data-k="e" value="${c.close}"></td><td><input class="input" data-k="n" value="${esc(((db.mkDays || {})[D] || {}).note || '')}"></td></tr></table>`,
@@ -4519,8 +4572,8 @@ function inboxHtml() {
   const T = today();
   return `<div class="infobox">Hier landen alle Anfragen der Redaktion – Maske, Studio, Schnitt, Live-Streams, Kamera, Interviews/Drehs. Sortiert nach Termin. Selbst einplanen geht wie gewohnt direkt in Studio, Maske, Schnitt oder Streaming.</div>
     <div class="table-wrap"><table class="t" style="min-width:820px"><thead><tr><th></th><th>Wann</th><th>Was</th><th>Art</th><th>Von</th><th>Eingang</th><th></th></tr></thead><tbody>
-    ${items.map(x => `<tr class="row ${(x.d || '').slice(0, 10) <= addDays(T, 1) ? 'urgent' : ''}" data-act="open" data-coll="${x.coll}" data-id="${x.id}"><td style="font-size:18px">${x.ic}</td><td style="white-space:nowrap">${esc(x.when)}</td><td><b>${esc(x.title)}</b></td><td>${esc(x.typ)}</td><td>${esc(x.by)}</td><td class="muted">${fmtTs(x.ts)}</td><td style="white-space:nowrap">${x.acts}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">Keine offenen Anfragen – alles bearbeitet 👍</td></tr>'}
-    </tbody></table></div><div class="muted" style="font-size:12px;margin-top:6px">Rot markiert = heute oder morgen.</div>`;
+    ${items.map(x => `<tr class="row ${(x.d || '').slice(0, 10) <= addDays(T, 1) ? 'urgent' : ''}" data-act="open" data-coll="${x.coll}" data-id="${x.id}"><td style="font-size:1.25rem">${x.ic}</td><td style="white-space:nowrap">${esc(x.when)}</td><td><b>${esc(x.title)}</b></td><td>${esc(x.typ)}</td><td>${esc(x.by)}</td><td class="muted">${fmtTs(x.ts)}</td><td style="white-space:nowrap">${x.acts}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">Keine offenen Anfragen – alles bearbeitet 👍</td></tr>'}
+    </tbody></table></div><div class="muted" style="font-size:0.75rem;margin-top:8px">Rot markiert = heute oder morgen.</div>`;
 }
 
 /* =========================================================================
@@ -4546,8 +4599,8 @@ function availEditorHtml(sid, m, ro) {
   const cell = d => { const v = (r.days || {})[d] || '', sh = shiftOf(sid, d); return `<div class="av-day ${v ? 'v-' + (AVAIL_LBL[v] ? v : 'code') : ''} ${d < T ? 'past' : ''} ${[0, 6].includes(parseISO(d).getDay()) ? 'we' : ''}" ${ro ? '' : `data-avd="${d}"`}><b>${+d.slice(8)}</b><span>${v === 'ja' ? '✅' : v === 'nein' ? '✕' : v ? esc(v) : ''}</span>${sh && isPublished(m) ? `<i class="av-sh">${esc(shiftRangeOf(sh))}</i>` : ''}</div>`; };
   const cnt = k => Object.values(r.days || {}).filter(v => k === 'code' ? v && !AVAIL_LBL[v] : v === k).length;
   return `<div class="av-wrap" data-avsid="${sid}" data-avm="${m}">
-    ${ro ? '' : `<div class="av-palette"><span class="muted" style="font-size:12px">Pinsel:</span>${[['ja', '✅ verfügbar'], ['nein', '✕ nicht verfügbar'], ['', '⌫ leeren']].map(([v, l]) => `<button type="button" class="chip ${brush === v ? 'on' : ''}" data-brush="${v}">${l}</button>`).join('')}</div>
-    <div class="pq-quick" style="margin:6px 0 10px"><button type="button" class="btn small" data-avq="wd">Mo–Fr verfügbar</button><button type="button" class="btn small" data-avq="we">Wochenenden ✕</button><button type="button" class="btn small" data-avq="all">alles verfügbar</button><button type="button" class="btn small ghost" data-avq="clear">alles leeren</button><span class="muted" style="font-size:12px;align-self:center">Tipp: Maus gedrückt halten und über mehrere Tage ziehen.</span></div>`}
+    ${ro ? '' : `<div class="av-palette"><span class="muted" style="font-size:0.75rem">Pinsel:</span>${[['ja', '✅ verfügbar'], ['nein', '✕ nicht verfügbar'], ['', '⌫ leeren']].map(([v, l]) => `<button type="button" class="chip ${brush === v ? 'on' : ''}" data-brush="${v}">${l}</button>`).join('')}</div>
+    <div class="pq-quick" style="margin:8px 0 8px"><button type="button" class="btn small" data-avq="wd">Mo–Fr verfügbar</button><button type="button" class="btn small" data-avq="we">Wochenenden ✕</button><button type="button" class="btn small" data-avq="all">alles verfügbar</button><button type="button" class="btn small ghost" data-avq="clear">alles leeren</button><span class="muted" style="font-size:0.75rem;align-self:center">Tipp: Maus gedrückt halten und über mehrere Tage ziehen.</span></div>`}
     <div class="av-cal">${['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'].map(x => `<div class="av-h">${x}</div>`).join('')}${'<div></div>'.repeat(lead)}${monthDays(m).map(cell).join('')}</div>
     <div class="av-sum">✅ ${cnt('ja')} verfügbar · ✕ ${cnt('nein')} nicht verfügbar · ohne Angabe ${monthDays(m).length - Object.values(r.days || {}).filter(Boolean).length}</div>
   </div>`;
@@ -4579,12 +4632,12 @@ function availMine() {
   return `<div class="toolbar"><button class="btn" data-act="avMonth" data-k="-1">‹</button><span class="datelabel">${monthLabel(m)}</span><button class="btn" data-act="avMonth" data-k="1">›</button><span class="spacer"></span>${r && r.submittedAt ? `<span class="badge ok">✓ abgegeben ${fmtTs(r.submittedAt)}</span>` : '<span class="badge warn">noch nicht abgegeben</span>'}</div>
     <div class="${pub ? 'okbox' : 'infobox'}">${pub ? `📢 Der Dienstplan für ${monthLabel(m)} ist veröffentlicht – deine Schichten stehen in den Tagen. Änderungen bitte direkt mit der Produktion absprechen.` : `Bitte trag bis <b>${fmtAvailDue(dl)}</b> ein, an welchen Tagen du im ${monthLabel(m)} kannst. Die Einteilung macht die Produktion bis zum <b>${fmtDate(dl.plan)}</b>.`}</div>
     <div class="card">${availEditorHtml(me.staffId, m, pub)}
-    ${pub ? '' : `<div class="wz-f" style="margin-top:12px"><label>Hinweis an die Produktion (optional)</label><textarea class="input" id="avNote" rows="2" placeholder="Optionaler Wunsch, z. B. bevorzugt spät, max. 12 Tage">${esc((r && r.note) || '')}</textarea></div><div class="toolbar" style="margin:0"><span class="spacer"></span><button class="btn primary" data-act="avSubmit" data-sid="${me.staffId}" data-m="${m}">📨 ${r && r.submittedAt ? 'Änderungen abgeben' : 'Verfügbarkeit abgeben'}</button></div>`}</div>`;
+    ${pub ? '' : `<div class="wz-f" style="margin-top:16px"><label>Hinweis an die Produktion (optional)</label><textarea class="input" id="avNote" rows="2" placeholder="Optionaler Wunsch, z. B. bevorzugt spät, max. 12 Tage">${esc((r && r.note) || '')}</textarea></div><div class="toolbar" style="margin:0"><span class="spacer"></span><button class="btn primary" data-act="avSubmit" data-sid="${me.staffId}" data-m="${m}">📨 ${r && r.submittedAt ? 'Änderungen abgeben' : 'Verfügbarkeit abgeben'}</button></div>`}</div>`;
 }
 function availDialog(sid, m) {
   const p = staffById(sid); if (!p) return;
   const r = availRec(sid, m);
-  const mm = showModal(`📅 Verfügbarkeit · ${esc(p.name)} · ${monthLabel(m)}`, `<div class="muted" style="font-size:12px;margin-bottom:8px">${r && r.submittedAt ? `Abgegeben ${fmtTs(r.submittedAt)}${r.note ? ` · 💬 ${esc(r.note)}` : ''}` : 'Noch keine Rückmeldung – du kannst die Angaben hier für die Person eintragen (z. B. aus einer Mail).'}</div>${availEditorHtml(sid, m, false)}<textarea class="input" id="avNote" rows="2" style="margin-top:10px" placeholder="Hinweis">${esc((r && r.note) || '')}</textarea>`,
+  const mm = showModal(`📅 Verfügbarkeit · ${esc(p.name)} · ${monthLabel(m)}`, `<div class="muted" style="font-size:0.75rem;margin-bottom:8px">${r && r.submittedAt ? `Abgegeben ${fmtTs(r.submittedAt)}${r.note ? ` · 💬 ${esc(r.note)}` : ''}` : 'Noch keine Rückmeldung – du kannst die Angaben hier für die Person eintragen (z. B. aus einer Mail).'}</div>${availEditorHtml(sid, m, false)}<textarea class="input" id="avNote" rows="2" style="margin-top:8px" placeholder="Hinweis">${esc((r && r.note) || '')}</textarea>`,
     `<button class="btn" data-m="close">Schließen</button><button class="btn primary" data-act="avSubmit" data-sid="${sid}" data-m="${m}">Speichern</button>`);
   void mm;
 }
@@ -4615,7 +4668,7 @@ function availDeadlineDialog(m, onlyMissing = false) {
   const dept = state.f.planDept || 'Cutter', people = planStaff(dept).filter(p => p.active !== false), dl = availDeadline(m);
   const selected = new Set(people.filter(p => p.email && (!onlyMissing || !(availRec(p.id, m) || {}).submittedAt)).map(p => p.id));
   const cards = people.map(p => { const submitted = !!(availRec(p.id, m) || {}).submittedAt, checked = selected.has(p.id); return `<label class="deadline-person"><input type="checkbox" data-dlperson="${p.id}" ${checked ? 'checked' : ''} ${p.email ? '' : 'disabled'}><span><b>${esc(p.name.replace(/\s*\(Demo\)/, ''))}</b><small>${p.email ? esc(p.email) : 'keine E-Mail-Adresse in Personal'} · ${submitted ? 'Verfügbarkeit abgegeben' : 'noch offen'}</small></span></label>`; }).join('');
-  const m0 = showModal(`📅 Frist & E-Mail · ${dept} · ${monthLabel(m)}`, `<div class="infobox">Lege für diesen Monat selbst fest, bis wann die Termine bzw. Verfügbarkeiten eingetragen sein sollen. Anschließend kannst du direkt eine E-Mail an die ausgewählten Personen erstellen.</div><div class="form"><div class="f"><label>Eintragen bis – Datum</label><input class="input" type="date" id="dlDate" value="${dl.due}"></div><div class="f"><label>Uhrzeit</label><input class="input" type="time" id="dlTime" value="${dl.dueTime || '18:00'}"></div><div class="f wide"><label>Empfänger*innen</label><div class="deadline-people">${cards}</div><div class="pq-row"><button type="button" class="btn small" id="dlAll">Alle mit E-Mail</button><button type="button" class="btn small" id="dlMissing">Nur fehlende</button><button type="button" class="btn small ghost" id="dlNone">Auswahl leeren</button></div></div><div class="f wide"><label>Betreff</label><input class="input" id="dlSubject"></div><div class="f wide"><label>E-Mail-Text</label><textarea class="input" id="dlBody" rows="10"></textarea></div></div><div class="muted" id="dlInfo" style="font-size:12px"></div>`, '<button class="btn" data-m="close">Schließen</button><button class="btn" id="dlCopy">📋 E-Mail kopieren</button><button class="btn" id="dlSave">Frist speichern</button><button class="btn primary" id="dlOutlook">✉️ Speichern & Outlook öffnen</button>');
+  const m0 = showModal(`📅 Frist & E-Mail · ${dept} · ${monthLabel(m)}`, `<div class="infobox">Lege für diesen Monat selbst fest, bis wann die Termine bzw. Verfügbarkeiten eingetragen sein sollen. Anschließend kannst du direkt eine E-Mail an die ausgewählten Personen erstellen.</div><div class="form"><div class="f"><label>Eintragen bis – Datum</label><input class="input" type="date" id="dlDate" value="${dl.due}"></div><div class="f"><label>Uhrzeit</label><input class="input" type="time" id="dlTime" value="${dl.dueTime || '18:00'}"></div><div class="f wide"><label>Empfänger*innen</label><div class="deadline-people">${cards}</div><div class="pq-row"><button type="button" class="btn small" id="dlAll">Alle mit E-Mail</button><button type="button" class="btn small" id="dlMissing">Nur fehlende</button><button type="button" class="btn small ghost" id="dlNone">Auswahl leeren</button></div></div><div class="f wide"><label>Betreff</label><input class="input" id="dlSubject"></div><div class="f wide"><label>E-Mail-Text</label><textarea class="input" id="dlBody" rows="10"></textarea></div></div><div class="muted" id="dlInfo" style="font-size:0.75rem"></div>`, '<button class="btn" data-m="close">Schließen</button><button class="btn" id="dlCopy">📋 E-Mail kopieren</button><button class="btn" id="dlSave">Frist speichern</button><button class="btn primary" id="dlOutlook">✉️ Speichern & Outlook öffnen</button>');
   const chosen = () => people.filter(p => { const el = $(`[data-dlperson="${p.id}"]`, m0); return el && el.checked && p.email; });
   let bodyTouched = false;
   const generated = () => { const ps = chosen(), first = ps.length === 1 ? ps[0].name.replace(/\s*\(Demo\)/, '').trim().split(' ')[0] : ''; return `${first ? 'Hallo ' + first : 'Hallo zusammen'},\n\nbitte tragt eure Verfügbarkeiten bzw. Termine für ${monthLabel(m)} bis ${fmtDate($('#dlDate', m0).value)}${$('#dlTime', m0).value ? ' um ' + $('#dlTime', m0).value + ' Uhr' : ''} im Production Hub ein (Schnitt → Meine Verfügbarkeit).\n\nDie Einteilung erfolgt anschließend durch die Produktion.\n\nDanke und viele Grüße\n${me.name}`; };
@@ -4699,7 +4752,7 @@ function w_ask() {
 }
 function w_studio(D) {
   const vp = grp() === 'Video Producer', bk = db.bookings.filter(b => b.date === D && b.status !== 'Abgesagt' && !(vp && (isBlock(b.type) || b.type === 'Dreh'))).sort((a, b) => (a.allDay ? '0' : a.start || '').localeCompare(b.allDay ? '0' : b.start || ''));
-  return `<div class="card"><h3>🎬 Studio ${D === today() ? 'heute' : fmtShort(D)} <span class="badge">${bk.length}</span></h3>${bk.map(b => rowL(b.allDay ? 'ganztägig' : `${b.start}–${b.end}`, b.title, `<i class="sw" style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${studioById(b.studioId).color}"></i> ${esc(studioById(b.studioId).name)}${b.type !== 'Produktion' ? ' · ' + esc(b.type) : ''}${b.needsMakeup ? ' · 💄' : ''}${b.live && !isBlock(b.type) ? ' · ' + liveChip(b) : ''}`, 'bookings', b)).join('') || '<div class="empty">Keine Studio-Termine.</div>'}</div>`;
+  return `<div class="card"><h3>🎬 Studio ${D === today() ? 'heute' : fmtShort(D)} <span class="badge">${bk.length}</span></h3>${bk.map(b => rowL(b.allDay ? 'ganztägig' : `${b.start}–${b.end}`, b.title, `<i class="sw" style="display:inline-block;width:8px;height:8px;border-radius:4px;background:${studioById(b.studioId).color}"></i> ${esc(studioById(b.studioId).name)}${b.type !== 'Produktion' ? ' · ' + esc(b.type) : ''}${b.needsMakeup ? ' · 💄' : ''}${b.live && !isBlock(b.type) ? ' · ' + liveChip(b) : ''}`, 'bookings', b)).join('') || '<div class="empty">Keine Studio-Termine.</div>'}</div>`;
 }
 function w_house(D) {
   const nm = nowMin(), T = today(), bk = db.bookings.filter(b => b.date === D && !isBlock(b.type) && b.status !== 'Abgesagt').sort((a, b) => (a.allDay ? '00:00' : a.start || '').localeCompare(b.allDay ? '00:00' : b.start || ''));
@@ -4711,20 +4764,20 @@ function w_streams(D) {
 }
 function w_makeup(D) {
   const mk = db.makeup.filter(m => m.date === D).sort((a, b) => a.start.localeCompare(b.start)), c = mkCfgD(D), o = (db.mkDays || {})[D];
-  return `<div class="card"><h3>💄 Maske ${D === today() ? 'heute' : fmtShort(D)} <span class="badge">${mk.length}</span></h3><div class="muted" style="font-size:12px;margin-bottom:4px">besetzt ${c.open}–${c.close} · ${c.capacity} gleichzeitig${o && o.note ? ' · ' + esc(o.note) : ''}${can.edit() ? ` · <a href="#" data-act="mkDay" data-date="${D}">ändern</a>` : ''}</div>${mk.map(m => rowL(`${m.start}–${mkEnd(m)}`, m.talent || m.kind, `${esc(m.gender || '')} · ${esc(m.kind)} · ${esc((m.location || '').split(' – ')[0])}${m.production ? ' · ' + esc(m.production) : ''}`, 'makeup', m)).join('') || '<div class="empty">Keine Masken-Slots.</div>'}</div>`;
+  return `<div class="card"><h3>💄 Maske ${D === today() ? 'heute' : fmtShort(D)} <span class="badge">${mk.length}</span></h3><div class="muted" style="font-size:0.75rem;margin-bottom:4px">besetzt ${c.open}–${c.close} · ${c.capacity} gleichzeitig${o && o.note ? ' · ' + esc(o.note) : ''}${can.edit() ? ` · <a href="#" data-act="mkDay" data-date="${D}">ändern</a>` : ''}</div>${mk.map(m => rowL(`${m.start}–${mkEnd(m)}`, m.talent || m.kind, `${esc(m.gender || '')} · ${esc(m.kind)} · ${esc((m.location || '').split(' – ')[0])}${m.production ? ' · ' + esc(m.production) : ''}`, 'makeup', m)).join('') || '<div class="empty">Keine Masken-Slots.</div>'}</div>`;
 }
 function w_mkfree(D) {
   const T = today(), nm = nowMin();
   const row = (d, lbl) => { const sg = mkSegments(d), cfg = mkCfgD(d); let nf = null; for (let t = Math.max(sg.from, d === T ? Math.ceil(nm / 15) * 15 : sg.from); t < sg.to; t += 15) if (mkCountAt(sg.items, t) < cfg.capacity) { nf = mint(t); break; } return `<div class="rd-mk"><div class="rd-mk-h"><b>${lbl}</b><span class="${nf ? 'ok' : 'full'}">${nf ? 'frei ab ' + nf : 'ausgebucht'}${(db.mkDays || {})[d] ? ' · ⚠️ ' + esc(cfg.open + '–' + cfg.close) : ''}</span></div>${stripHtml({ from: sg.from, to: sg.to, segs: sg.segs, data: { kind: 'mk', date: d }, closed: false, isToday: d === T })}</div>`; };
-  return `<div class="rd-card"><div class="rd-h"><span>💄</span><b>Maske – freie Zeiten</b></div><div class="muted" style="font-size:12px;margin-bottom:6px">Grün = frei · Gelb = teilweise · Rot = voll. <b>In die Leiste tippen</b> = ${can.edit() ? 'direkt einplanen' : 'Maske anfragen'}.</div>${row(D, D === T ? 'Heute' : fmtShort(D))}${row(addDays(D, 1), D === T ? 'Morgen' : fmtShort(addDays(D, 1)))}${row(addDays(D, 2), WDL[parseISO(addDays(D, 2)).getDay()])}</div>`;
+  return `<div class="rd-card"><div class="rd-h"><span>💄</span><b>Maske – freie Zeiten</b></div><div class="muted" style="font-size:0.75rem;margin-bottom:8px">Grün = frei · Gelb = teilweise · Rot = voll. <b>In die Leiste tippen</b> = ${can.edit() ? 'direkt einplanen' : 'Maske anfragen'}.</div>${row(D, D === T ? 'Heute' : fmtShort(D))}${row(addDays(D, 1), D === T ? 'Morgen' : fmtShort(addDays(D, 1)))}${row(addDays(D, 2), WDL[parseISO(addDays(D, 2)).getDay()])}</div>`;
 }
 function w_cutters(D) {
   const on = cutters().map(p => ({ p, sh: shiftOf(p.id, D) })).filter(x => x.sh).sort((a, b) => freeOn(b.p.id, D) - freeOn(a.p.id, D));
-  return `<div class="rd-card"><div class="rd-h"><span>✂️</span><b>Cutter ${D === today() ? 'heute' : fmtShort(D)}</b><em>${on.length}</em><button class="btn small" data-act="go" data-view="post">Alle</button></div>${on.map(({ p, sh }) => { const free = freeOn(p.id, D), cap = capOn(p.id, D), pct = Math.min(100, loadOn(p.id, D) / (cap || 1) * 100), cur = db.edits.filter(e => e.staffId === p.id && isActiveEdit(e) && editOnDay(e, D))[0]; return `<div class="rd-cut"><div class="rd-av" style="background:${avColor(p.name)}">${initials(p.name.replace(/\s*\(Demo\)/, ''))}</div><div style="flex:1;min-width:0"><div class="rd-t">${esc(p.name.replace(/\s*\(Demo\)/, ''))} <span class="muted" style="font-weight:400;font-size:12px">${shiftRangeOf(sh)}</span></div><div class="rd-meter"><i style="width:${pct}%;background:${free >= 3 ? 'var(--ok)' : free > 0 ? 'var(--warn)' : 'var(--bad)'}"></i></div><div class="sub">${cur ? '✂️ ' + esc(cur.title) : 'gerade nichts zugeteilt'}</div></div><span class="rd-free ${free >= 3 ? 'ok' : free > 0 ? 'mid' : 'full'}">${free > 0 ? fmtH(free) + ' frei' : 'voll'}</span></div>`; }).join('') || '<div class="empty">Niemand im Schnitt.</div>'}${!can.edit() ? '<div class="rd-foot"><span></span><button class="btn small primary" data-act="wiz" data-type="Schnitt">✂️ Schnitt anfragen</button></div>' : ''}</div>`;
+  return `<div class="rd-card"><div class="rd-h"><span>✂️</span><b>Cutter ${D === today() ? 'heute' : fmtShort(D)}</b><em>${on.length}</em><button class="btn small" data-act="go" data-view="post">Alle</button></div>${on.map(({ p, sh }) => { const free = freeOn(p.id, D), cap = capOn(p.id, D), pct = Math.min(100, loadOn(p.id, D) / (cap || 1) * 100), cur = db.edits.filter(e => e.staffId === p.id && isActiveEdit(e) && editOnDay(e, D))[0]; return `<div class="rd-cut"><div class="rd-av" style="background:${avColor(p.name)}">${initials(p.name.replace(/\s*\(Demo\)/, ''))}</div><div style="flex:1;min-width:0"><div class="rd-t">${esc(p.name.replace(/\s*\(Demo\)/, ''))} <span class="muted" style="font-weight:400;font-size:0.75rem">${shiftRangeOf(sh)}</span></div><div class="rd-meter"><i style="width:${pct}%;background:${free >= 3 ? 'var(--ok)' : free > 0 ? 'var(--warn)' : 'var(--bad)'}"></i></div><div class="sub">${cur ? '✂️ ' + esc(cur.title) : 'gerade nichts zugeteilt'}</div></div><span class="rd-free ${free >= 3 ? 'ok' : free > 0 ? 'mid' : 'full'}">${free > 0 ? fmtH(free) + ' frei' : 'voll'}</span></div>`; }).join('') || '<div class="empty">Niemand im Schnitt.</div>'}${!can.edit() ? '<div class="rd-foot"><span></span><button class="btn small primary" data-act="wiz" data-type="Schnitt">✂️ Schnitt anfragen</button></div>' : ''}</div>`;
 }
 function w_live(D) {
   const lr = (db.liveReqs || []).filter(r => r.status !== 'Abgelehnt' && (r.until || r.date) >= D).sort((a, b) => (a.date + (a.start || '')).localeCompare(b.date + (b.start || ''))).slice(0, 6);
-  return `<div class="rd-card"><div class="rd-h"><span>📡</span><b>Live-Streams – angefragt & geplant</b><em>${lr.length}</em><button class="btn small" data-act="${techView() ? 'vpGo' : 'goReq'}" data-to="livereq" data-tab="live">Alle</button></div><div class="lr-list compact">${lr.map(r => liveReqItem(r, true)).join('') || '<div class="empty">Keine Live-Stream-Anfragen.</div>'}</div>${!can.edit() ? '<div class="rd-foot"><span class="muted" style="font-size:12px">Erst schauen, ob es schon angefragt ist.</span><button class="btn small primary" data-act="wiz" data-type="Live-Stream">📡 Live-Stream anfragen</button></div>' : ''}</div>`;
+  return `<div class="rd-card"><div class="rd-h"><span>📡</span><b>Live-Streams – angefragt & geplant</b><em>${lr.length}</em><button class="btn small" data-act="${techView() ? 'vpGo' : 'goReq'}" data-to="livereq" data-tab="live">Alle</button></div><div class="lr-list compact">${lr.map(r => liveReqItem(r, true)).join('') || '<div class="empty">Keine Live-Stream-Anfragen.</div>'}</div>${!can.edit() ? '<div class="rd-foot"><span class="muted" style="font-size:0.75rem">Erst schauen, ob es schon angefragt ist.</span><button class="btn small primary" data-act="wiz" data-type="Live-Stream">📡 Live-Stream anfragen</button></div>' : ''}</div>`;
 }
 function w_mine(D) {
   const mine = [
@@ -4797,9 +4850,9 @@ function adStageHtml(st) {
 }
 function adCard(st, compact = false) {
   const z = adState(st), a = z.a, d = parseISO(st.date), exp = adBreakExpected(st);
-  const lf = a.adLFrames.map(x => `<div class="ad-task ${x.installed ? 'done' : ''}"><button class="tick ${x.installed ? 'on' : ''}" ${canAds() ? `data-act="adToggle" data-id="${st.id}" data-lf="${x.id}"` : 'disabled'}>${x.installed ? '✓' : ''}</button><div class="grow"><b>${x.qty}× ${esc(x.name)}</b>${x.installed && x.installedAt ? `<div class="sub">installiert von ${esc(userName(x.installedBy))} · ${fmtTs(x.installedAt)}</div>` : ''}</div>${x.url ? `<a class="ad-link" href="${esc(x.url)}" target="_blank" rel="noopener" data-act="noop">⬇ Download</a>` : '<span class="hint-red" style="font-size:11px">Link fehlt</span>'}</div>`).join('');
+  const lf = a.adLFrames.map(x => `<div class="ad-task ${x.installed ? 'done' : ''}"><button class="tick ${x.installed ? 'on' : ''}" ${canAds() ? `data-act="adToggle" data-id="${st.id}" data-lf="${x.id}"` : 'disabled'}>${x.installed ? '✓' : ''}</button><div class="grow"><b>${x.qty}× ${esc(x.name)}</b>${x.installed && x.installedAt ? `<div class="sub">installiert von ${esc(userName(x.installedBy))} · ${fmtTs(x.installedAt)}</div>` : ''}</div>${x.url ? `<a class="ad-link" href="${esc(x.url)}" target="_blank" rel="noopener" data-act="noop">⬇ Download</a>` : '<span class="hint-red" style="font-size:0.75rem">Link fehlt</span>'}</div>`).join('');
   return `<div class="ad-card ${z.done === 3 ? 'done' : 'attn'}"><div class="ad-head"><div class="ad-date"><b>${d.getDate()}</b><small>${MONTHS[d.getMonth()].slice(0,3)}</small></div><div class="ad-main"><div class="ad-title">${esc(st.name)}</div><div class="sub">${esc(st.start || '')}${st.end ? '–' + esc(st.end) : ''} · ${esc(st.access || 'Free')} · ${esc((st.platforms || []).join(', '))}</div></div><span class="badge ${z.done === 3 ? 'ok' : 'warn'}">${z.done}/3</span></div>${adStageHtml(st)}<div class="ad-progress"><i style="width:${z.pct}%"></i></div>
-    ${compact ? '' : `<div class="ad-section"><h4>📣 ${esc(a.adMode)}</h4>${a.adStandard ? `<div class="ad-standard-note"><span>♻️</span><div><b>${esc(a.adStandard.name)}</b><div class="sub">${esc(a.adStandard.note || 'Wird automatisch auf passende Eigenproduktionen angewendet.')}</div></div></div>` : ''}${a.adCustomers ? `<div class="sub" style="margin-bottom:4px">Kunden: ${esc(a.adCustomers)}</div>` : ''}${a.adMode === 'Nur Pre-Roll' ? `<div class="ad-task ${a.adPreRollDone ? 'done' : ''}"><button class="tick ${a.adPreRollDone ? 'on' : ''}" ${canAds() ? `data-act="adToggle" data-id="${st.id}" data-lf="preroll"` : 'disabled'}>${a.adPreRollDone ? '✓' : ''}</button><div class="grow"><b>Pre-Roll angeliefert & eingebaut</b></div></div>` : ''}${lf || (a.adMode === 'Werbe-Koordination / Kunden' ? '<div class="empty">Noch keine L-Frames hinterlegt.</div>' : '')}${a.adBreakMode !== 'Keine Werbebreaks' ? `<div class="sub" style="margin-top:5px"><b>Werbebreaks:</b> ${esc(a.adBreakMode)} · ${a.adBreakCount}× ${a.adBreakUnit} à ${a.adBreakDuration} Sek.${exp ? ` · ca. ${exp} Breaks / ${Math.floor(exp * a.adBreakDuration / 60)}:${pad(exp * a.adBreakDuration % 60)} Min. gesamt` : ''}</div>` : ''}</div>`}
+    ${compact ? '' : `<div class="ad-section"><h4>📣 ${esc(a.adMode)}</h4>${a.adStandard ? `<div class="ad-standard-note"><span>♻️</span><div><b>${esc(a.adStandard.name)}</b><div class="sub">${esc(a.adStandard.note || 'Wird automatisch auf passende Eigenproduktionen angewendet.')}</div></div></div>` : ''}${a.adCustomers ? `<div class="sub" style="margin-bottom:4px">Kunden: ${esc(a.adCustomers)}</div>` : ''}${a.adMode === 'Nur Pre-Roll' ? `<div class="ad-task ${a.adPreRollDone ? 'done' : ''}"><button class="tick ${a.adPreRollDone ? 'on' : ''}" ${canAds() ? `data-act="adToggle" data-id="${st.id}" data-lf="preroll"` : 'disabled'}>${a.adPreRollDone ? '✓' : ''}</button><div class="grow"><b>Pre-Roll angeliefert & eingebaut</b></div></div>` : ''}${lf || (a.adMode === 'Werbe-Koordination / Kunden' ? '<div class="empty">Noch keine L-Frames hinterlegt.</div>' : '')}${a.adBreakMode !== 'Keine Werbebreaks' ? `<div class="sub" style="margin-top:4px"><b>Werbebreaks:</b> ${esc(a.adBreakMode)} · ${a.adBreakCount}× ${a.adBreakUnit} à ${a.adBreakDuration} Sek.${exp ? ` · ca. ${exp} Breaks / ${Math.floor(exp * a.adBreakDuration / 60)}:${pad(exp * a.adBreakDuration % 60)} Min. gesamt` : ''}</div>` : ''}</div>`}
     <div class="ad-actions">${canPlanAds() ? `<button class="btn small primary" data-act="adEdit" data-id="${st.id}">✏️ Werbung bearbeiten</button>` : ''}<button class="btn small" data-act="open" data-coll="streams" data-id="${st.id}">📡 Event</button>${st.playerUrl ? playerChip('streams', st) : '<span class="badge warn">Player fehlt</span>'}</div></div>`;
 }
 function adsView() {
@@ -4819,8 +4872,8 @@ function adEditDialog(id) {
   const st = db.streams.find(x => x.id === id); if (!st) return; const a = adNorm(st), plan = canPlanAds();
   const m = showModal(`📣 Werbung · ${esc(st.name)}`, `<div class="infobox">${fmtShort(st.date)} ${esc(st.start || '')}${st.end ? '–' + esc(st.end) : ''} · ${esc(st.access || 'Free')}<br>Hier werden ausschließlich Werbestandards und der operative Werbeablauf gepflegt. Video Producer haken angelieferte L-Frames nach der Installation ab.</div>
     <div class="form"><div class="f wide"><label>Werberegel</label><select class="input" id="adMode" ${plan ? '' : 'disabled'}>${AD_MODES.map(x => `<option ${x === a.adMode ? 'selected' : ''}>${x}</option>`).join('')}</select></div><div class="f wide"><label>Produktionsstandard (bei wiederkehrender Eigenproduktion)</label><select class="input" id="adStd" ${plan ? '' : 'disabled'}><option value="">– automatisch nach Eventname / keiner –</option>${adStandards().map(x => `<option value="${x.id}" ${x.id === a.adStandardId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div><div class="f wide"><label>Werbekunden / Werbeabsprachen</label><textarea class="input" id="adCust" rows="2" ${plan ? '' : 'disabled'}>${esc(a.adCustomers)}</textarea></div></div>
-    <div class="card" style="margin-top:12px"><h3>🎞 L-Frames <span class="muted" style="font-weight:400">Clips zur manuellen Installation durch Video Producer</span></h3>${plan ? `<div class="pq-row"><select class="input" id="adTpl"><option value="">Vorlage anwenden …</option>${adTemplates().map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select><button class="btn small" id="adAddLf">+ L-Frame</button></div>` : ''}<div id="adLf"></div></div>
-    <div class="card" style="margin-top:12px"><h3>⏸ Werbebreaks</h3><div class="form"><div class="f"><label>Ablauf</label><select class="input" id="adBm" ${plan ? '' : 'disabled'}>${['Keine Werbebreaks','Nach Regieplan','Auf Zuruf'].map(x => `<option ${x === a.adBreakMode ? 'selected' : ''}>${x}</option>`).join('')}</select></div><div class="f"><label>Häufigkeit</label><div class="pq-row"><input class="input" type="number" min="0" id="adBc" value="${a.adBreakCount}" style="width:75px" ${plan ? '' : 'disabled'}><select class="input" id="adBu" ${plan ? '' : 'disabled'}><option ${a.adBreakUnit === 'gesamt' ? 'selected' : ''}>gesamt</option><option ${a.adBreakUnit === 'pro Stunde' ? 'selected' : ''}>pro Stunde</option></select></div></div><div class="f"><label>Dauer je Break (Sek.)</label><input class="input" type="number" min="1" id="adBd" value="${a.adBreakDuration}" ${plan ? '' : 'disabled'}></div><div class="f"><label>Pre-Roll</label><label class="toggle"><input type="checkbox" id="adPre" ${a.adPreRollDone ? 'checked' : ''} ${canAds() ? '' : 'disabled'}> angeliefert & eingebaut</label></div><div class="f wide"><label>Notizen</label><textarea class="input" id="adNt" rows="2" ${plan ? '' : 'disabled'}>${esc(a.adNotes)}</textarea></div></div></div>`, `<button class="btn" data-m="close">Schließen</button>${canAds() ? '<button class="btn primary" id="adSave">Speichern</button>' : ''}`);
+    <div class="card" style="margin-top:16px"><h3>🎞 L-Frames <span class="muted" style="font-weight:400">Clips zur manuellen Installation durch Video Producer</span></h3>${plan ? `<div class="pq-row"><select class="input" id="adTpl"><option value="">Vorlage anwenden …</option>${adTemplates().map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select><button class="btn small" id="adAddLf">+ L-Frame</button></div>` : ''}<div id="adLf"></div></div>
+    <div class="card" style="margin-top:16px"><h3>⏸ Werbebreaks</h3><div class="form"><div class="f"><label>Ablauf</label><select class="input" id="adBm" ${plan ? '' : 'disabled'}>${['Keine Werbebreaks','Nach Regieplan','Auf Zuruf'].map(x => `<option ${x === a.adBreakMode ? 'selected' : ''}>${x}</option>`).join('')}</select></div><div class="f"><label>Häufigkeit</label><div class="pq-row"><input class="input" type="number" min="0" id="adBc" value="${a.adBreakCount}" style="width:75px" ${plan ? '' : 'disabled'}><select class="input" id="adBu" ${plan ? '' : 'disabled'}><option ${a.adBreakUnit === 'gesamt' ? 'selected' : ''}>gesamt</option><option ${a.adBreakUnit === 'pro Stunde' ? 'selected' : ''}>pro Stunde</option></select></div></div><div class="f"><label>Dauer je Break (Sek.)</label><input class="input" type="number" min="1" id="adBd" value="${a.adBreakDuration}" ${plan ? '' : 'disabled'}></div><div class="f"><label>Pre-Roll</label><label class="toggle"><input type="checkbox" id="adPre" ${a.adPreRollDone ? 'checked' : ''} ${canAds() ? '' : 'disabled'}> angeliefert & eingebaut</label></div><div class="f wide"><label>Notizen</label><textarea class="input" id="adNt" rows="2" ${plan ? '' : 'disabled'}>${esc(a.adNotes)}</textarea></div></div></div>`, `<button class="btn" data-m="close">Schließen</button>${canAds() ? '<button class="btn primary" id="adSave">Speichern</button>' : ''}`);
   let lfs = a.adLFrames.map(x => ({ ...x }));
   const drawLf = () => { $('#adLf', m).innerHTML = lfs.map((x, i) => `<div class="ad-lf-row" data-lfi="${i}"><input class="input" type="number" min="1" data-lfk="qty" value="${x.qty}" ${plan ? '' : 'disabled'}><input class="input" data-lfk="name" value="${esc(x.name)}" placeholder="Bezeichnung" ${plan ? '' : 'disabled'}><input class="input lf-url" data-lfk="url" value="${esc(x.url)}" placeholder="Download-Link https://…" ${plan ? '' : 'disabled'}><label title="installiert"><input type="checkbox" data-lfk="installed" ${x.installed ? 'checked' : ''} ${canAds() ? '' : 'disabled'}> ✓</label>${plan ? '<button class="btn small ghost" data-lfdel="' + i + '">✕</button>' : ''}</div>`).join('') || '<div class="empty">Noch keine L-Frames.</div>'; };
   drawLf();
@@ -4841,9 +4894,9 @@ function adStandardsDialog() {
 function businessFlowWidget(D) {
   const list = db.streams.filter(s => isEvent(s) && s.date >= D && s.date <= addDays(D, 30));
   const n = f => list.filter(s => f(adState(s))).length;
-  return `<div class="card"><h3>📈 Streaming-Prozess · nächste 30 Tage <span class="badge">${list.length} Events</span></h3><div class="biz-flow"><div class="biz-step"><b>${n(z => z.ads)}/${list.length}</b><small>📣 Werbung</small></div><div class="biz-step"><b>${n(z => z.tech)}/${list.length}</b><small>⚙️ Technik</small></div><div class="biz-step"><b>${n(z => z.player)}/${list.length}</b><small>▶ Player</small></div></div><div class="ad-actions" style="margin-top:10px"><button class="btn small primary" data-act="go" data-view="ads">📣 Werbeabläufe</button><button class="btn small" data-act="go" data-view="streams">📡 Streaming-Events</button></div></div>`;
+  return `<div class="card"><h3>📈 Streaming-Prozess · nächste 30 Tage <span class="badge">${list.length} Events</span></h3><div class="biz-flow"><div class="biz-step"><b>${n(z => z.ads)}/${list.length}</b><small>📣 Werbung</small></div><div class="biz-step"><b>${n(z => z.tech)}/${list.length}</b><small>⚙️ Technik</small></div><div class="biz-step"><b>${n(z => z.player)}/${list.length}</b><small>▶ Player</small></div></div><div class="ad-actions" style="margin-top:8px"><button class="btn small primary" data-act="go" data-view="ads">📣 Werbeabläufe</button><button class="btn small" data-act="go" data-view="streams">📡 Streaming-Events</button></div></div>`;
 }
-function businessAdsWidget(D) { const l = db.streams.filter(s => isEvent(s) && s.date >= D && s.date <= addDays(D, 14)).sort(byDate).slice(0, 5); return `<div class="card"><h3>📣 Werbung · nächste 14 Tage <span class="badge ${l.some(s => !adState(s).ads) ? 'warn' : 'ok'}">${l.length}</span></h3>${l.map(s => `<div class="list-row" data-act="adEdit" data-id="${s.id}"><div class="time">${fmtShort(s.date)}<br>${esc(s.start || '')}</div><div style="flex:1;min-width:0"><div><b>${esc(s.name)}</b></div><div class="sub">${esc(adNorm(s).adMode)} · ${adState(s).done}/3 Schritte</div><div class="ad-progress"><i style="width:${adState(s).pct}%"></i></div></div></div>`).join('') || '<div class="empty">Keine Events.</div>'}<button class="btn small" data-act="go" data-view="ads" style="margin-top:7px">Alle Werbeabläufe</button></div>`; }
+function businessAdsWidget(D) { const l = db.streams.filter(s => isEvent(s) && s.date >= D && s.date <= addDays(D, 14)).sort(byDate).slice(0, 5); return `<div class="card"><h3>📣 Werbung · nächste 14 Tage <span class="badge ${l.some(s => !adState(s).ads) ? 'warn' : 'ok'}">${l.length}</span></h3>${l.map(s => `<div class="list-row" data-act="adEdit" data-id="${s.id}"><div class="time">${fmtShort(s.date)}<br>${esc(s.start || '')}</div><div style="flex:1;min-width:0"><div><b>${esc(s.name)}</b></div><div class="sub">${esc(adNorm(s).adMode)} · ${adState(s).done}/3 Schritte</div><div class="ad-progress"><i style="width:${adState(s).pct}%"></i></div></div></div>`).join('') || '<div class="empty">Keine Events.</div>'}<button class="btn small" data-act="go" data-view="ads" style="margin-top:8px">Alle Werbeabläufe</button></div>`; }
 Object.assign(ACTIONS, {
   adEdit: d => adEditDialog(d.id),
   adStandards: () => adStandardsDialog(),
@@ -4901,7 +4954,7 @@ function widgetDashboard(main) {
   const D = state.date.dash, T = today(), edit = !!state.dashEdit, lay = myLayout(), h = new Date().getHours();
   const hints = db.streams.filter(s => s.kind === 'Hinweistag' && s.date === D);
   const wrap = x => { const W = WIDGETS[x.id], size = x.size || W.size || ''; let body = ''; try { body = W.r(D); } catch (e) { body = `<div class="card"><div class="empty">Widget konnte nicht geladen werden.</div></div>`; } return `<div class="wgt ${size === 'f' ? 'f' : size === 'w' ? 'w' : ''}" data-wid="${x.id}" ${edit ? 'draggable="true"' : ''}>${edit ? `<div class="wgt-bar"><span class="wgt-grip">⠿</span><b>${W.ic} ${esc(W.t)}</b><span class="spacer"></span><button class="btn small ghost" data-act="wUp" data-id="${x.id}" title="nach vorne">↑</button><button class="btn small ghost" data-act="wDown" data-id="${x.id}" title="nach hinten">↓</button><button class="btn small ghost" data-act="wSize" data-id="${x.id}" title="Breite: normal / breit / ganze Zeile">${size === 'f' ? '▭▭▭' : size === 'w' ? '▭▭' : '▭'}</button><button class="btn small ghost" data-act="wDel" data-id="${x.id}" title="Entfernen">✕</button></div>` : ''}<div class="wgt-body">${body}</div></div>`; };
-  main.innerHTML = `<div class="toolbar">${dateNav('dash', `${WDL[parseISO(D).getDay()]}, ${fmtDate(D)}`, 'day')}<span class="muted" style="margin-left:6px">${h < 11 ? 'Guten Morgen' : h < 17 ? 'Hallo' : 'Guten Abend'}, ${esc(me.name.split(' ')[0])} 👋</span><span class="spacer"></span>
+  main.innerHTML = `<div class="toolbar">${dateNav('dash', `${WDL[parseISO(D).getDay()]}, ${fmtDate(D)}`, 'day')}<span class="muted" style="margin-left:8px">${h < 11 ? 'Guten Morgen' : h < 17 ? 'Hallo' : 'Guten Abend'}, ${esc(me.name.split(' ')[0])} 👋</span><span class="spacer"></span>
       ${edit ? `<button class="btn" data-act="wAdd">+ Widget hinzufügen</button><button class="btn" data-act="wReset">↺ Standard</button><button class="btn primary" data-act="wEdit">✓ Fertig</button>` : `<div class="seg-ctl density-ctl" title="Kachelgröße – kompakte Größen werden bei langen Inhalten scrollbar"><button class="seg-btn ${state.tileDensity === 'normal' ? 'on' : ''}" data-act="tileDensity" data-v="normal">Normal</button><button class="seg-btn ${state.tileDensity === 'compact' ? 'on' : ''}" data-act="tileDensity" data-v="compact">Kompakt</button><button class="seg-btn ${state.tileDensity === 'small' ? 'on' : ''}" data-act="tileDensity" data-v="small">Klein</button></div><button class="btn" data-act="wEdit" title="Widgets verschieben, entfernen, hinzufügen">✏️ Übersicht anpassen</button>`}</div>
     ${edit ? '<div class="infobox">Widgets per <b>Ziehen</b> an der Leiste oder mit ↑ ↓ verschieben · Breite umschalten · ✕ entfernt · „+ Widget hinzufügen“ ergänzt. Gespeichert wird automatisch – nur für dich.</div>' : ''}
     ${hints.map(x => `<div class="warnbox">⚠️ <b>${esc(x.name)}</b> ${esc(x.notes || '')}</div>`).join('')}
@@ -4948,6 +5001,561 @@ Object.assign(ACTIONS, {
   },
   avRemind: d => availDeadlineDialog(d.m, true),
 });
+
+/* =========================================================================
+   v0.27 Streaming – Tabellen-Erfassung (Excel-Gefühl), Duplizieren, Serien & Vorlagen
+   ========================================================================= */
+const SG_TPL_DEFAULT = () => {
+  const wwe = { geo: 'D-A-CH', mode: 'Live', platforms: ['BILD'], access: 'Plus', pass: false, commentator: 'Originalkommentar', commentatorWish: 'Enrico Ahlig', contact: 'Alex Sparkes · alex.sparkes@wwecorp.com', producerContact: 'lance.mcconomy@wwecorp.com\nbryan.staffaroni@wwecorp.com\nMichael.Calabrese@wwecorp.com\nthomas.sitrin@wwecorp.com', cubaId: 'cu3', sport: 'Sport', status: 'Bestätigt' };
+  const dyn = { geo: 'D-A-CH', mode: 'Live', platforms: ['WELT TV', 'BILD', 'Sportbild 24/7-Kanal', 'YouTube'], access: 'Free', pass: false, owner: 'Sport Video Redaktion', sport: 'Sport', status: 'Bestätigt' };
+  const own = { geo: 'Weltweit', mode: 'Live', platforms: ['BILD', 'Sportbild 24/7-Kanal', 'YouTube'], access: 'Free', pass: false, owner: 'Sport Video Redaktion', cubaId: 'cu1', sport: 'Sport', status: 'Bestätigt' };
+  return [
+    { id: 'tpl_raw', label: 'WWE RAW', name: 'WWE RAW', wds: [2], start: '02:00', end: '06:00', stand: { type: 'offset', days: 30 }, fields: { ...wwe } },
+    { id: 'tpl_sd', label: 'WWE SmackDown', name: 'WWE SmackDown', wds: [6], start: '02:00', end: '05:00', stand: { type: 'offset', days: 30 }, fields: { ...wwe } },
+    { id: 'tpl_hbl', label: 'Dyn HBL (Handball)', name: 'Dyn HBL {paarung}', wds: [0], start: '15:00', end: '16:30', stand: { type: 'fixed', date: '2027-07-31' }, fields: { ...dyn, cubaId: 'cu1' } },
+    { id: 'tpl_bbl', label: 'Dyn BBL (Basketball)', name: 'Dyn BBL {paarung}', wds: [0], start: '16:30', end: '18:45', stand: { type: 'fixed', date: '2027-07-31' }, fields: { ...dyn, cubaId: 'cu4' } },
+    { id: 'tpl_hockey', label: 'Dyn Hockey', name: 'Dyn Hockey {paarung}', wds: [6], start: '14:15', end: '16:00', stand: { type: 'fixed', date: '2027-07-31' }, fields: { ...dyn, platforms: ['Sportbild 24/7-Kanal', 'YouTube'], cubaId: 'cu4' } },
+    { id: 'tpl_ril', label: 'Reif ist Live', name: 'Reif ist Live', wds: [1, 4], start: '10:25', end: '11:30', stand: { type: 'none' }, fields: { ...own } },
+    { id: 'tpl_ldl', label: 'Lage der Liga', name: 'Lage der Liga', wds: [0], start: '09:55', end: '11:00', stand: { type: 'none' }, fields: { ...own } },
+    { id: 'tpl_wlm', label: 'We Love MMA', name: 'We Love MMA {nr}', wds: [6], start: '19:00', end: '23:00', stand: { type: 'fixed', date: '2026-12-31' }, fields: { geo: 'D-A-CH', mode: 'Live', platforms: ['BILD', 'Sportbild 24/7-Kanal'], access: 'Plus', pass: false, commentator: 'Über Veranstalter (Deutsch)', owner: 'Max Schrader, Niklas Keller', contact: 'Marcus Wortmeier · marcus@togetherpromotion.com · 01788932922', cubaId: 'cu2', sport: 'Sport', status: 'Bestätigt', notes: '0 EUR Pass für Altersverifizierung' } },
+    { id: 'tpl_zuffa', label: 'Zuffa Boxing', name: 'Zuffa Boxing {nr}', wds: [6], start: '22:30', end: '06:30', stand: { type: 'fixed', date: '2026-12-31' }, fields: { geo: 'Deutschland', mode: 'Live', platforms: ['BILD'], access: 'Plus', pass: false, commentator: 'Originalkommentar', owner: 'Kilian Gaffrey, Max Schrader, Niklas Keller', contact: 'Victoria Coghlan · vcoghlan@ufc.com', producerContact: 'Alex Sparkes · alex.sparkes@wwecorp.com\nlschinto@strategictv.com\nvverno@strategictv.com', cubaId: 'cu2', sport: 'Sport', status: 'Bestätigt' } },
+  ];
+};
+function sgTemplates() { if (!Array.isArray(db.streamTemplates)) { db.streamTemplates = SG_TPL_DEFAULT(); persist(); } return db.streamTemplates; }
+const SG_WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+const sgCanUse = () => can.edit() || canBusinessStream();
+const sgCols = () => [
+  { k: 'date', l: 'Datum', w: 112, t: 'date', sticky: 1 },
+  { k: '_wd', l: 'Tag', w: 48, ro: true, sticky: 2 },
+  { k: 'name', l: 'Event Name', w: 280, t: 'text', sticky: 3 },
+  { k: 'status', l: 'Status', w: 136, t: 'sel', o: () => STATUS_STREAM },
+  { k: 'geo', l: 'Georestriktion', w: 120, t: 'sel', o: () => db.options.geo || [] },
+  { k: 'standzeit', l: 'Standzeit', w: 120, t: 'stand' },
+  { k: 'mode', l: 'Live/Relive', w: 128, t: 'sel', o: () => db.options.modes || [] },
+  { k: 'start', l: 'Start', w: 80, t: 'time' },
+  { k: 'end', l: 'Ende', w: 80, t: 'time' },
+  { k: 'platforms', l: 'Plattformen', w: 240, t: 'multi', o: () => db.options.platforms || [] },
+  { k: 'access', l: 'Free/Plus', w: 96, t: 'sel', o: () => ['Free', 'Plus'] },
+  { k: 'pass', l: 'Pass', w: 56, t: 'bool' },
+  { k: 'commentator', l: 'Kommentator', w: 176, t: 'text' },
+  { k: 'commentatorWish', l: 'Kommentatoren-Wunsch', w: 176, t: 'text' },
+  { k: 'owner', l: 'Event Owner intern', w: 176, t: 'text' },
+  { k: 'contact', l: 'Kontakt Veranstalter', w: 216, t: 'text' },
+  { k: 'producerContact', l: 'Kontakt Produzent', w: 216, t: 'text' },
+  ...(techView() ? [{ k: 'cubaId', l: 'CUBA', w: 128, t: 'sel', o: () => ['', ...(db.cubas || []).map(c => c.id)], lab: v => v ? ((cubaById(v) || {}).name || v) : '–' }] : []),
+  { k: 'sport', l: 'Sport', w: 120, t: 'sel', o: () => ['', 'Sport', 'Non-Sport'], lab: v => v || '–' },
+  { k: 'notes', l: 'Notizen', w: 216, t: 'text' },
+];
+const SG_EXCEL_MAP = ['date', '_skip', 'name', 'status', 'geo', 'standzeit', 'mode', 'start', 'end', 'platforms', 'access', 'pass', 'commentator', 'commentatorWish', 'owner', 'contact', 'producerContact', '_skip', '_skip', 'cubaId', 'sport'];
+let sgFocus = null, sgSel = new Set();
+
+function sgParseDate(v, base) {
+  v = String(v || '').trim(); if (!v) return null;
+  let m;
+  if ((m = v.match(/^([+-])\s*(\d+)$/))) return addDays(base || today(), (m[1] === '-' ? -1 : 1) * +m[2]);
+  if ((m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return v;
+  if ((m = v.match(/^(\d{1,2})[.\/](\d{1,2})\.?(?:[.\/]?(\d{2,4}))?$/))) {
+    let y = m[3] ? +m[3] : null; if (y != null && y < 100) y += 2000;
+    if (y == null) { const b = parseISO(base || today()); y = b.getFullYear(); const cand = toISO(new Date(y, +m[2] - 1, +m[1])); if (cand < addDays(base || today(), -120)) y++; }
+    const d = new Date(y, +m[2] - 1, +m[1]); if (d.getMonth() !== +m[2] - 1) return undefined;
+    return toISO(d);
+  }
+  if (/^\d{5}$/.test(v)) { const d = new Date(Date.UTC(1899, 11, 30) + (+v) * 864e5); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`; }
+  return undefined;
+}
+function sgParseTime(v) {
+  v = String(v || '').trim().toLowerCase().replace(/\s*uhr$/, '').replace(/^ca\.?\s*/, ''); if (!v) return '';
+  let m;
+  if ((m = v.match(/^(\d{1,2})[:.,](\d{2})(?:[:.]\d{2})?$/))) { if (+m[1] > 24 || +m[2] > 59) return undefined; return `${pad(+m[1] % 24)}:${m[2]}`; }
+  if ((m = v.match(/^(\d{1,2})$/))) return +m[1] <= 24 ? `${pad(+m[1] % 24)}:00` : undefined;
+  if ((m = v.match(/^(\d{1,2})(\d{2})$/))) return +m[1] <= 24 && +m[2] <= 59 ? `${pad(+m[1] % 24)}:${m[2]}` : undefined;
+  if ((m = v.match(/^0?\.\d+$|^1$/))) { const t = Math.round(parseFloat(v) * 1440) % 1440; return `${pad(Math.floor(t / 60))}:${pad(t % 60)}`; }
+  return undefined;
+}
+function sgParseMulti(v, opts) {
+  return [...new Set(String(v || '').split(/[,;\n]|\s+\/\s+/).map(s => s.trim()).filter(Boolean).map(s => {
+    const l = s.toLowerCase().replace(/\.de$/, '');
+    return opts.find(o => o.toLowerCase() === l) || opts.find(o => o.toLowerCase().startsWith(l)) || opts.find(o => l.length > 3 && o.toLowerCase().includes(l)) || s;
+  }))];
+}
+function sgParseSel(v, opts) { const s = String(v || '').trim(); if (!s) return ''; return opts.find(o => String(o).toLowerCase() === s.toLowerCase()) || opts.find(o => String(o).toLowerCase().startsWith(s.toLowerCase())) || s; }
+function sgParse(col, raw, rec) {
+  switch (col.t) {
+    case 'date': { const d = sgParseDate(raw, rec.date); return d === null ? undefined : d; }
+    case 'stand': { const s = String(raw || '').trim(); if (!s || /^unb|^u$|^-$/i.test(s)) return ''; return sgParseDate(s, rec.date); }
+    case 'time': return sgParseTime(raw);
+    case 'multi': return sgParseMulti(raw, col.o());
+    case 'bool': return typeof raw === 'boolean' ? raw : /^(ja|j|x|true|1|yes)$/i.test(String(raw).trim());
+    case 'sel': return col.k === 'cubaId' && raw && !/^cu\d/.test(raw) ? cubaFromText(raw) : sgParseSel(raw, col.o());
+    default: return String(raw ?? '').trim();
+  }
+}
+const sgShow = (col, rec) => {
+  const v = rec[col.k];
+  if (col.k === '_wd') return rec.date ? wd(rec.date) : '';
+  if (col.t === 'date') return fmtDate(v);
+  if (col.t === 'stand') return v ? fmtDate(v) : '';
+  if (col.t === 'multi') return (v || []).join(', ');
+  return v ?? '';
+};
+function sgEditable(col, rec) {
+  if (col.ro) return false;
+  if (rec.kind === 'Hinweistag') return ['date', 'name', 'notes'].includes(col.k) && can.edit();
+  if (can.edit()) return true;
+  return canBusinessStream() && BUSINESS_STREAM_FIELDS.includes(col.k);
+}
+function sgBlank(o = {}) {
+  const r = { kind: 'Event', custom: {}, recording: [], tests: [], platforms: [], contractStatus: 'Offen', adLFrames: [], adBreakMode: 'Keine Werbebreaks', adBreakUnit: 'gesamt', adBreakDuration: 68 };
+  fieldsFor('streams').forEach(f => { if (f.def != null && r[f.key] == null) r[f.key] = f.def; });
+  return { ...r, status: 'In Klärung', mode: 'Live', geo: 'D-A-CH', access: 'Free', pass: false, platforms: ['BILD'], name: '', ...o };
+}
+const SG_NO_COPY = ['id', 'createdAt', 'createdBy', 'updatedAt', 'updatedBy', 'tests', 'playerUrl', 'playerSent', 'liveReqId'];
+function sgBumpNr(name) { return String(name).replace(/(\D|^)(\d{1,3})(\s*)$/, (m, a, n, s) => a + String(+n + 1).padStart(n.length, '0') + s); }
+function sgCopy(src, shift, bump) {
+  const c = JSON.parse(JSON.stringify(src)); SG_NO_COPY.forEach(k => delete c[k]);
+  c.tests = []; c.date = addDays(src.date, shift);
+  if (src.standzeit) { const diff = Math.round((parseISO(src.standzeit) - parseISO(src.date)) / 864e5); if (diff >= 0 && diff <= 35) c.standzeit = addDays(c.date, diff); }
+  if (bump) c.name = sgBumpNr(c.name);
+  return c;
+}
+const sgExists = (name, date) => db.streams.some(s => s.date === date && s.name.trim().toLowerCase() === String(name).trim().toLowerCase());
+
+function sgView(main) {
+  const f = state.f, opt = (arr, cur) => arr.map(o => `<option ${o === cur ? 'selected' : ''}>${esc(o)}</option>`).join('');
+  const cols = sgCols(), rows = streamRows();
+  sgSel = new Set([...sgSel].filter(id => rows.some(r => r.id === id)));
+  let left = 40; const stickyLeft = {}; cols.forEach(c => { if (c.sticky) { stickyLeft[c.k] = left; left += c.w; } });
+  const selN = sgSel.size;
+  let html = `<div class="toolbar">${tabsHtml('streams', STREAM_TABS())}${streamMenuHtml()}
+    ${f.streamsRange === 'month' ? dateNav('streams', `${MONTHS[parseISO(state.date.streams).getMonth()]} ${parseISO(state.date.streams).getFullYear()}`, 'month') : ''}
+    <input class="input" placeholder="Suchen …" data-filter="streamsQ" value="${esc(f.streamsQ)}" style="width:176px" aria-label="Events durchsuchen">
+    <select class="input" data-filter="streamsStatus" aria-label="Filter Status"><option value="">Alle Status</option>${opt(STATUS_STREAM, f.streamsStatus)}</select>
+    <select class="input" data-filter="streamsRange" aria-label="Zeitraum"><option value="upcoming" ${f.streamsRange === 'upcoming' ? 'selected' : ''}>Ab heute</option><option value="month" ${f.streamsRange === 'month' ? 'selected' : ''}>Monat</option><option value="all" ${f.streamsRange === 'all' ? 'selected' : ''}>Alle</option></select>
+    <span class="spacer"></span>
+    <button class="btn" data-act="sgHelp" title="Tastenkürzel">⌨ Kürzel</button>
+    <button class="btn" data-act="sgTpl">\uD83D\uDCCB Aus Vorlage / Serie</button>
+    <button class="btn" data-act="sgRepeat" ${selN ? '' : 'disabled'} title="Markierte Zeilen wöchentlich fortschreiben">↻ Wiederholen${selN ? ` (${selN})` : ''}</button>
+    ${can.edit() ? `<button class="btn" data-act="sgDelSel" ${selN ? '' : 'disabled'}>\uD83D\uDDD1 Löschen${selN ? ` (${selN})` : ''}</button>` : ''}
+    <button class="btn primary" data-act="sgAdd">+ Zeile</button></div>
+  <div class="sg-hint muted">Tippen wie in Excel: <b>Tab</b> = nächste Zelle · <b>Enter</b> = Zeile darunter · <b>Strg+D</b> = Zeile duplizieren · <b>Strg+⇧+D</b> = +1 Woche · Zeilen aus der alten Excel lassen sich direkt in die Datumsspalte einfügen.</div>
+  <div class="table-wrap sg-wrap" id="sgWrap"><table class="t sg" id="sgGrid" role="grid" aria-label="Streaming-Events Tabelle" style="width:${cols.reduce((s, c) => s + c.w, 40 + 136)}px">
+  <colgroup><col style="width:40px">${cols.map(c => `<col style="width:${c.w}px">`).join('')}<col style="width:136px"></colgroup>
+  <thead><tr><th class="sg-stk" style="left:0"><input type="checkbox" class="sg-cb" data-sgall aria-label="Alle markieren" ${rows.length && selN === rows.filter(r => r.kind !== 'Hinweistag').length ? 'checked' : ''}></th>${cols.map(c => `<th ${c.sticky ? `class="sg-stk" style="left:${stickyLeft[c.k]}px"` : ''}>${esc(c.l)}</th>`).join('')}<th>Aktionen</th></tr></thead><tbody>`;
+  const T = today();
+  rows.forEach((r, ri) => {
+    const hint = r.kind === 'Hinweistag';
+    html += `<tr class="${hint ? 'sg-hintrow' : ''} ${r.status === 'Findet nicht statt' ? 'sg-cancel' : ''} ${r.date < T ? 'sg-past' : ''} ${sgSel.has(r.id) ? 'sg-on' : ''}" data-sgrow="${r.id}">
+      <td class="sg-stk" style="left:0">${hint ? '⚠️' : `<input type="checkbox" class="sg-cb" data-sgpick="${r.id}" aria-label="Zeile ${esc(r.name)} markieren" ${sgSel.has(r.id) ? 'checked' : ''}>`}</td>`;
+    cols.forEach((c, ci) => {
+      const stk = c.sticky ? ` sg-stk" style="left:${stickyLeft[c.k]}px` : '';
+      if (hint && !['date', '_wd', 'name'].includes(c.k)) { if (c.k === 'status') html += `<td colspan="${cols.length - 3}" class="sg-hintcell"><input class="sg-in" data-sgid="${r.id}" data-sgc="notes" data-sgr="${ri}" data-sgi="${ci}" value="${esc(r.notes || '')}" aria-label="Hinweis-Notiz" ${can.edit() ? '' : 'readonly'} placeholder="Hinweis …"></td>`; return; }
+      const ed = sgEditable(c, r), aria = `aria-label="${esc(c.l)} – ${esc(r.name || 'neue Zeile')}"`, base = `class="sg-in" data-sgid="${r.id}" data-sgc="${c.k}" data-sgr="${ri}" data-sgi="${ci}" ${aria}`;
+      if (c.ro) { html += `<td class="sg-ro${stk}">${esc(sgShow(c, r))}</td>`; return; }
+      if (c.t === 'sel') { const cur = r[c.k] ?? '', list = c.o(); html += `<td class="${stk.replace(/^ /, '')}"><select ${base} ${ed ? '' : 'disabled'}>${(list.includes(cur) ? list : [cur, ...list]).map(o => `<option value="${esc(o)}" ${o === cur ? 'selected' : ''}>${esc(c.lab ? c.lab(o) : o)}</option>`).join('')}</select></td>`; return; }
+      if (c.t === 'bool') { html += `<td class="sg-c${stk}"><input type="checkbox" ${base} ${r[c.k] ? 'checked' : ''} ${ed ? '' : 'disabled'}></td>`; return; }
+      const ph = c.t === 'stand' ? 'Unbegrenzt' : c.t === 'date' ? 'TT.MM.' : c.t === 'time' ? 'hh:mm' : c.t === 'multi' ? 'BILD, YouTube …' : '';
+      html += `<td class="${stk.replace(/^ /, '')}"><input ${base} value="${esc(sgShow(c, r))}" placeholder="${ph}" ${c.t === 'multi' ? 'list="sgPlat"' : ''} ${ed ? '' : 'readonly'} autocomplete="off" spellcheck="false"></td>`;
+    });
+    html += `<td class="sg-act">${hint ? '' : `<button class="btn small" data-act="sgDup" data-id="${r.id}" data-n="0" title="Duplizieren (Strg+D)" aria-label="${esc(r.name)} duplizieren">⧉</button><button class="btn small" data-act="sgDup" data-id="${r.id}" data-n="7" title="+1 Woche (Strg+⇧+D)" aria-label="${esc(r.name)} eine Woche später">+7</button>`}<button class="btn small" data-act="open" data-coll="streams" data-id="${r.id}" title="Alle Details öffnen" aria-label="${esc(r.name)} im Formular öffnen">⋯</button></td></tr>`;
+  });
+  if (!rows.length) html += `<tr><td colspan="${cols.length + 2}"><div class="empty">Keine Events für diesen Filter. Mit <b>+ Zeile</b> oder <b>Aus Vorlage</b> anlegen.</div></td></tr>`;
+  html += `</tbody></table></div><datalist id="sgPlat">${(db.options.platforms || []).map(p => `<option value="${esc(p)}">`).join('')}</datalist>
+  <div class="muted" style="margin-top:8px;font-size:0.75rem">${rows.length} Einträge · Änderungen werden sofort gespeichert · Sortierung aktualisiert sich beim nächsten Laden der Ansicht</div>`;
+  main.innerHTML = html;
+  sgBind(main);
+  if (sgFocus) { const el = sgCell(sgFocus.id, sgFocus.k) || (sgFocus.id && $(`[data-sgid="${sgFocus.id}"]`, main)); if (el) { el.focus({ preventScroll: false }); if (el.select && sgFocus.select !== false) { if (sgFocus.range) el.setSelectionRange(...sgFocus.range); else el.select(); } el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } sgFocus = null; }
+}
+const sgCell = (id, k) => document.querySelector(`#sgGrid [data-sgid="${id}"][data-sgc="${k}"]`);
+const sgRec = id => db.streams.find(s => s.id === id);
+
+function sgCommit(el) {
+  const rec = sgRec(el.dataset.sgid); if (!rec) return;
+  const col = sgCols().find(c => c.k === el.dataset.sgc) || { k: el.dataset.sgc, t: 'text' };
+  const raw = el.type === 'checkbox' ? el.checked : el.value;
+  const v = sgParse(col, raw, rec);
+  if (v === undefined) { el.classList.add('sg-err'); el.setAttribute('aria-invalid', 'true'); toast(`„${esc(raw)}“ ist kein gültiger Wert für ${esc(col.l || col.k)}.`, 'err'); return; }
+  el.classList.remove('sg-err'); el.removeAttribute('aria-invalid');
+  if (JSON.stringify(rec[col.k] ?? '') === JSON.stringify(v ?? '')) { if (el.tagName === 'INPUT' && el.type !== 'checkbox') el.value = sgShow(col, rec); return; }
+  const nu = { ...rec, [col.k]: v };
+  saveRecord('streams', nu, false, true);
+  if (el.tagName === 'INPUT' && el.type !== 'checkbox') el.value = sgShow(col, nu);
+  if (col.k === 'date') { const tr = el.closest('tr'), wdc = tr && tr.querySelector('.sg-ro'); if (wdc) wdc.textContent = nu.date ? wd(nu.date) : ''; }
+  if (col.k === 'status') { const tr = el.closest('tr'); tr && tr.classList.toggle('sg-cancel', v === 'Findet nicht statt'); }
+  el.closest('td') && el.closest('td').classList.add('sg-saved'); setTimeout(() => el.closest('td') && el.closest('td').classList.remove('sg-saved'), 600);
+  renderNavBadges();
+}
+function sgMove(el, dr, dc) {
+  const r = +el.dataset.sgr + dr, i = +el.dataset.sgi + dc;
+  const t = document.querySelector(`#sgGrid [data-sgr="${r}"][data-sgi="${i}"]`) || (dc === 0 && document.querySelector(`#sgGrid [data-sgr="${r}"]`));
+  if (t) { t.focus(); t.select && t.select(); return true; }
+  return false;
+}
+function sgBind(main) {
+  const grid = $('#sgGrid', main); if (!grid) return;
+  grid.addEventListener('change', e => {
+    const el = e.target;
+    if (el.dataset.sgpick) { el.checked ? sgSel.add(el.dataset.sgpick) : sgSel.delete(el.dataset.sgpick); el.closest('tr').classList.toggle('sg-on', el.checked); sgToolbar(); return; }
+    if (el.hasAttribute('data-sgall')) { streamRows().filter(r => r.kind !== 'Hinweistag').forEach(r => el.checked ? sgSel.add(r.id) : sgSel.delete(r.id)); sgFocus = null; render(); return; }
+    if (el.dataset.sgc) sgCommit(el);
+  });
+  grid.addEventListener('focusin', e => { const el = e.target; if (el.dataset && el.dataset.sgc) el.dataset.orig = el.type === 'checkbox' ? el.checked : el.value; });
+  grid.addEventListener('keydown', e => {
+    const el = e.target; if (!el.dataset || !el.dataset.sgc) return;
+    const mod = e.ctrlKey || e.metaKey, id = el.dataset.sgid;
+    if (mod && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); if (el.tagName === 'INPUT' && el.type !== 'checkbox') sgCommit(el); sgDuplicate([id], e.shiftKey ? 7 : 0, el.dataset.sgc); return; }
+    if (mod && e.key === 'Enter') { e.preventDefault(); sgCommit(el); sgAddRow(id); return; }
+    if (e.key === 'Escape' && el.dataset.orig != null && el.tagName === 'INPUT' && el.type !== 'checkbox') { e.stopPropagation(); el.value = el.dataset.orig; el.classList.remove('sg-err'); return; }
+    if (e.key === 'Enter' && el.tagName !== 'SELECT') { e.preventDefault(); if (el.type === 'checkbox') { el.checked = !el.checked; sgCommit(el); return; } sgCommit(el); sgMove(el, e.shiftKey ? -1 : 1, 0); return; }
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && el.tagName === 'INPUT' && el.type !== 'checkbox' && !e.altKey && !el.list) { e.preventDefault(); sgCommit(el); sgMove(el, e.key === 'ArrowDown' ? 1 : -1, 0); return; }
+    if (e.key === 'Tab' && !e.shiftKey) {
+      const lastRow = !document.querySelector(`#sgGrid [data-sgr="${+el.dataset.sgr + 1}"]`);
+      const inputs = [...el.closest('tr').querySelectorAll('[data-sgc]')].filter(x => !x.disabled && !x.readOnly);
+      if (lastRow && inputs[inputs.length - 1] === el && can.edit()) { e.preventDefault(); sgCommit(el); sgAddRow(id); }
+    }
+  });
+  grid.addEventListener('paste', e => {
+    const el = e.target; if (!el.dataset || !el.dataset.sgc || el.readOnly) return;
+    const txt = (e.clipboardData || window.clipboardData).getData('text');
+    if (!/[\t\n]/.test(txt.replace(/\n$/, ''))) return;
+    e.preventDefault(); sgPaste(el, txt);
+  });
+}
+function sgToolbar() {
+  const n = sgSel.size, rep = $('[data-act="sgRepeat"]'), del = $('[data-act="sgDelSel"]');
+  if (rep) { rep.disabled = !n; rep.textContent = `↻ Wiederholen${n ? ` (${n})` : ''}`; }
+  if (del) { del.disabled = !n; del.textContent = `\uD83D\uDDD1 Löschen${n ? ` (${n})` : ''}`; }
+}
+function sgAddRow(afterId) {
+  if (!can.edit() && !canBusinessStream()) return;
+  const ref = afterId && sgRec(afterId);
+  const rec = sgBlank({ date: ref ? ref.date : (state.f.streamsRange === 'month' ? state.date.streams : today()) });
+  saveRecord('streams', rec, true, true);
+  sgFocus = { id: rec.id, k: 'name' }; render();
+}
+function sgDuplicate(ids, shift, focusKey) {
+  if (!can.edit() && !canBusinessStream()) return;
+  let last = null, n = 0, skip = 0;
+  ids.map(sgRec).filter(r => r && r.kind !== 'Hinweistag').forEach(src => {
+    const c = sgCopy(src, shift, shift > 0);
+    if (shift > 0 && sgExists(c.name, c.date)) { skip++; return; }
+    saveRecord('streams', c, true, true); last = c; n++;
+  });
+  if (!last) { toast(skip ? 'Gibt es schon – nichts angelegt.' : 'Nichts dupliziert.', ''); return; }
+  const m = shift === 0 && ids.length === 1 && last.name.match(/^(dyn\s+\S+\s+(?:\([A-Z]\)\s+)?)(.+)$/i);
+  sgFocus = { id: last.id, k: m ? 'name' : (focusKey || 'name'), range: m ? [m[1].length, last.name.length] : null };
+  toast(`⧉ ${n} Zeile${n > 1 ? 'n' : ''} ${shift ? `um ${shift} Tage versetzt ` : ''}angelegt${skip ? ` · ${skip} gab es schon` : ''}`, 'ok');
+  render();
+}
+async function sgPaste(el, txt) {
+  const rows = []; let row = [], cell = '', q = false;
+  for (let i = 0; i < txt.length; i++) {
+    const ch = txt[i];
+    if (q) { if (ch === '"' && txt[i + 1] === '"') { cell += '"'; i++; } else if (ch === '"') q = false; else cell += ch; continue; }
+    if (ch === '"' && cell === '') q = true; else if (ch === '\t') { row.push(cell); cell = ''; } else if (ch === '\n' || ch === '\r') { if (ch === '\r' && txt[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = ''; } else cell += ch;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  const data = rows.filter(r => r.some(c => c.trim()));
+  if (!data.length) return;
+  const cols = sgCols(), startI = cols.findIndex(c => c.k === el.dataset.sgc);
+  const excel = el.dataset.sgc === 'date' && data[0].length >= 12;
+  const keys = excel ? SG_EXCEL_MAP : cols.slice(startI).map(c => c.ro ? '_skip' : c.k);
+  const ordered = streamRows(); const idx = ordered.findIndex(r => r.id === el.dataset.sgid);
+  if (data.length > 1 && !(await askConfirm(`${data.length} Zeilen einfügen?${excel ? '\n\nErkannt: Zeilen aus der bisherigen Excel – Spalten werden automatisch zugeordnet (OTT/Sport World werden übersprungen).' : ''}\n\nBestehende Zeilen ab der aktuellen werden überschrieben, fehlende neu angelegt.`))) return;
+  let made = 0, upd = 0, bad = 0, lastId = null;
+  data.forEach((cells, k) => {
+    let rec = k === 0 ? sgRec(el.dataset.sgid) : null;
+    if (k > 0) { const nx = ordered[idx + k]; rec = excel || !nx || nx.kind === 'Hinweistag' ? null : nx; }
+    const isNew = !rec; rec = rec ? { ...rec } : sgBlank({ date: today() });
+    keys.forEach((key, j) => {
+      if (key === '_skip' || cells[j] == null) return; const raw = cells[j].trim(); if (raw === '' && excel) return;
+      const col = sgCols().find(c => c.k === key) || { k: key, t: key === 'cubaId' ? 'sel' : 'text', o: () => [] };
+      const v = sgParse(col, raw, rec); if (v === undefined) { bad++; return; } rec[key] = v;
+    });
+    if (excel && !cells[3]) rec.status = 'Bestätigt';
+    if (!rec.name || !rec.date) { bad++; return; }
+    if (isNew && excel && sgExists(rec.name, rec.date)) return;
+    saveRecord('streams', rec, isNew, true); lastId = rec.id; isNew ? made++ : upd++;
+  });
+  toast(`\uD83D\uDCCB Eingefügt: ${made} neu · ${upd} aktualisiert${bad ? ` · ${bad} Werte nicht erkannt` : ''}`, bad ? '' : 'ok');
+  sgFocus = lastId ? { id: lastId, k: 'name', select: false } : null; render();
+}
+function sgRepeatDialog() {
+  const recs = [...sgSel].map(sgRec).filter(Boolean); if (!recs.length) return;
+  const m = showModal('↻ Markierte Events wiederholen', `<p class="muted">${recs.map(r => `<b>${esc(r.name)}</b> (${wd(r.date)} ${fmtDate(r.date)})`).join(', ')}</p>
+    <div class="form"><div class="f"><label for="sgEvery">Alle … Tage</label><input id="sgEvery" class="input" type="number" min="1" value="7"></div>
+    <div class="f"><label for="sgTimes">Wie oft?</label><input id="sgTimes" class="input" type="number" min="1" max="52" value="4"></div>
+    <div class="f wide"><label class="toggle"><input type="checkbox" id="sgBump" ${recs.some(r => /\d{1,3}\s*$/.test(r.name)) ? 'checked' : ''}> Laufende Nummer im Titel hochzählen (z. B. We Love MMA 89 → 90)</label></div>
+    <div class="f wide"><label class="toggle"><input type="checkbox" id="sgOpen"> Neue Termine als „In Klärung“ anlegen</label></div></div>
+    <div id="sgRepPrev" class="sg-prev"></div>`, `<button class="btn" data-m="close">Abbrechen</button><button class="btn primary" id="sgRepGo">Anlegen</button>`);
+  const plan = () => { const every = Math.max(1, +$('#sgEvery', m).value || 7), times = Math.min(52, Math.max(1, +$('#sgTimes', m).value || 1)), out = [];
+    recs.forEach(r => { let cur = r; for (let i = 1; i <= times; i++) { const c = sgCopy(cur, every, $('#sgBump', m).checked); if ($('#sgOpen', m).checked) c.status = 'In Klärung'; out.push(c); cur = c; } });
+    return out.sort((a, b) => a.date.localeCompare(b.date)); };
+  const prev = () => { const p = plan(); $('#sgRepPrev', m).innerHTML = `<b>${p.length} Termine:</b><ul>${p.slice(0, 40).map(c => `<li class="${sgExists(c.name, c.date) ? 'sg-dupe' : ''}">${wd(c.date)} ${fmtDate(c.date)} · ${esc(c.start || '')} · ${esc(c.name)}${sgExists(c.name, c.date) ? ' – <i>existiert schon, wird übersprungen</i>' : ''}</li>`).join('')}${p.length > 40 ? '<li>…</li>' : ''}</ul>`; };
+  m.addEventListener('input', prev); m.addEventListener('change', prev); prev();
+  $('#sgRepGo', m).onclick = () => { let n = 0; plan().forEach(c => { if (sgExists(c.name, c.date)) return; saveRecord('streams', c, true, true); n++; }); closeModal(); sgSel.clear(); toast(`↻ ${n} Termine angelegt`, 'ok'); render(); };
+}
+function sgStandFor(tpl, date) { const s = tpl.stand || { type: 'none' }; return s.type === 'offset' ? addDays(date, +s.days || 0) : s.type === 'fixed' ? (s.date || '') : ''; }
+function sgNextNr(tpl) {
+  const pre = tpl.name.split('{nr}')[0].trim().toLowerCase(); let max = 0;
+  db.streams.forEach(s => { if (s.name.toLowerCase().startsWith(pre)) { const m = s.name.slice(pre.length).match(/^\s*(\d{1,3})/); if (m) max = Math.max(max, +m[1]); } });
+  return max + 1;
+}
+function sgTplDialog(preId) {
+  const tpls = sgTemplates(); let tpl = tpls.find(t => t.id === preId) || tpls[0];
+  const T = today();
+  const body = () => `<div class="form">
+    <div class="f wide"><label for="sgT">Vorlage</label><select id="sgT" class="input">${tpls.map(t => `<option value="${t.id}" ${t.id === tpl.id ? 'selected' : ''}>${esc(t.label)}</option>`).join('')}</select>
+      <small class="muted">${esc(tpl.name)} · ${tpl.wds.map(d => SG_WD[d]).join('/')} ${esc(tpl.start || '')}–${esc(tpl.end || '')} · ${esc((tpl.fields.platforms || []).join(', '))} · ${esc(tpl.fields.access || '')} · Standzeit ${tpl.stand.type === 'offset' ? `+${tpl.stand.days} Tage` : tpl.stand.type === 'fixed' ? fmtDate(tpl.stand.date) : 'unbegrenzt'}</small></div>
+    <div class="f"><label for="sgFrom">Von</label><input id="sgFrom" class="input" type="date" value="${T}"></div>
+    <div class="f"><label for="sgTo">Bis</label><input id="sgTo" class="input" type="date" value="${addDays(T, 27)}"></div>
+    <div class="f wide"><label>Wochentage</label><div class="sg-wds">${[1, 2, 3, 4, 5, 6, 0].map(d => `<label class="toggle"><input type="checkbox" data-sgwd="${d}" ${tpl.wds.includes(d) ? 'checked' : ''}> ${SG_WD[d]}</label>`).join('')}</div></div>
+    <div class="f"><label for="sgS">Start</label><input id="sgS" class="input" value="${esc(tpl.start || '')}" placeholder="hh:mm"></div>
+    <div class="f"><label for="sgE">Ende</label><input id="sgE" class="input" value="${esc(tpl.end || '')}" placeholder="hh:mm"></div>
+    ${tpl.name.includes('{nr}') ? `<div class="f"><label for="sgNr">Erste Nummer</label><input id="sgNr" class="input" type="number" value="${sgNextNr(tpl)}"></div>` : ''}
+    ${tpl.name.includes('{paarung}') ? `<div class="f wide"><label for="sgPairs">Paarungen – eine pro Zeile (optional mit Datum/Uhrzeit vorne)</label><textarea id="sgPairs" class="input" rows="6" placeholder="08.11. Füchse Berlin – SC Magdeburg\n15.11. 16:30 THW Kiel – HSV Hamburg\nRhein-Neckar Löwen – Flensburg"></textarea><small class="muted">Zeilen ohne Datum werden auf die nächsten passenden Wochentage im Zeitraum verteilt. Direkt aus dem Dyn-Spielplan kopieren funktioniert.</small></div>` : ''}
+  </div><div id="sgTplPrev" class="sg-prev"></div>
+  <details class="sg-tplman"><summary>Vorlagen verwalten</summary><ul>${tpls.map(t => `<li>${esc(t.label)} <span class="muted">(${esc(t.name)})</span> ${can.edit() ? `<button class="btn small" data-sgtpldel="${t.id}" aria-label="Vorlage ${esc(t.label)} löschen">Entfernen</button>` : ''}</li>`).join('')}</ul><p class="muted">Neue Vorlage: in der Tabelle eine fertige Zeile markieren und „Als Vorlage speichern“ wählen.</p>${can.admin() ? '<button class="btn small" data-sgtplreset>Standard-Vorlagen wiederherstellen</button>' : ''}</details>`;
+  const m = showModal('\uD83D\uDCCB Events aus Vorlage anlegen', '<div id="sgTplBody"></div>', `<button class="btn" data-m="close">Abbrechen</button>${sgSel.size === 1 ? '<button class="btn" id="sgTplSave">Markierte Zeile als Vorlage speichern</button>' : ''}<button class="btn primary" id="sgTplGo">Anlegen</button>`, 'wide');
+  const plan = () => {
+    const from = $('#sgFrom', m).value, to = $('#sgTo', m).value, wds = [...m.querySelectorAll('[data-sgwd]:checked')].map(x => +x.dataset.sgwd);
+    const st = sgParseTime($('#sgS', m).value) || tpl.start || '', en = sgParseTime($('#sgE', m).value) || tpl.end || '';
+    const days = []; if (from && to && to >= from) for (let d = from; d <= to && days.length < 200; d = addDays(d, 1)) if (wds.includes(parseISO(d).getDay())) days.push(d);
+    const mk = (date, name, s = st) => ({ ...sgBlank(), ...JSON.parse(JSON.stringify(tpl.fields)), date, name, start: s, end: en, standzeit: sgStandFor(tpl, date) });
+    if (tpl.name.includes('{paarung}')) {
+      const lines = ($('#sgPairs', m) ? $('#sgPairs', m).value : '').split('\n').map(x => x.trim()).filter(Boolean); let di = 0; const out = [];
+      lines.forEach(line => {
+        let date = null, s = st, rest = line, mm;
+        if ((mm = rest.match(/^(?:(?:mo|di|mi|do|fr|sa|so)\.?,?\s+)?(\d{1,2}\.\d{1,2}\.(?:\d{2,4})?)\s*/i))) { date = sgParseDate(mm[1].replace(/\.$/, ''), from); rest = rest.slice(mm[0].length); }
+        if ((mm = rest.match(/^(\d{1,2}[:.]\d{2})\s*(?:uhr)?\s*[-–|]?\s*/i))) { s = sgParseTime(mm[1]) || s; rest = rest.slice(mm[0].length); }
+        rest = rest.replace(/\s+(vs\.?|gegen|-)\s+/i, ' – ');
+        if (!date) { date = days[di++]; if (!date) return; }
+        out.push(mk(date, tpl.name.replace('{paarung}', rest).trim(), s));
+      });
+      return out;
+    }
+    let nr = $('#sgNr', m) ? +$('#sgNr', m).value : 0;
+    return days.map(d => mk(d, tpl.name.replace('{nr}', nr++).trim()));
+  };
+  const prev = () => { const p = plan(); $('#sgTplPrev', m).innerHTML = p.length ? `<b>${p.length} Event${p.length > 1 ? 's' : ''}:</b><ul>${p.slice(0, 60).map(c => `<li class="${sgExists(c.name, c.date) ? 'sg-dupe' : ''}">${wd(c.date)} ${fmtDate(c.date)} · ${esc(c.start)}–${esc(c.end)} · ${esc(c.name)}${sgExists(c.name, c.date) ? ' – <i>existiert schon</i>' : ''}</li>`).join('')}</ul>` : '<span class="muted">Noch keine Termine – Zeitraum, Wochentage oder Paarungen prüfen.</span>'; };
+  const draw = () => { $('#sgTplBody', m).innerHTML = body(); prev(); };
+  m.addEventListener('input', e => { if (e.target.id === 'sgT') return; prev(); });
+  m.addEventListener('change', e => { if (e.target.id === 'sgT') { tpl = tpls.find(t => t.id === e.target.value) || tpl; draw(); } else prev(); });
+  m.addEventListener('click', async e => {
+    const del = e.target.closest('[data-sgtpldel]'); if (del) { if (!(await askConfirm('Vorlage entfernen?'))) return; db.streamTemplates = tpls.filter(t => t.id !== del.dataset.sgtpldel); persist(); closeModal(); sgTplDialog(); return; }
+    if (e.target.closest('[data-sgtplreset]')) { db.streamTemplates = SG_TPL_DEFAULT(); persist(); closeModal(); sgTplDialog(); }
+  });
+  $('#sgTplGo', m).onclick = () => { let n = 0, s = 0; plan().forEach(c => { if (sgExists(c.name, c.date)) { s++; return; } saveRecord('streams', c, true, true); n++; }); closeModal(); toast(`\uD83D\uDCCB ${n} Events aus „${esc(tpl.label)}“ angelegt${s ? ` · ${s} gab es schon` : ''}`, 'ok'); render(); };
+  const sv = $('#sgTplSave', m); if (sv) sv.onclick = () => sgSaveTpl([...sgSel][0]);
+  draw();
+}
+function sgSaveTpl(id) {
+  const r = sgRec(id); if (!r) return;
+  const diff = r.standzeit ? Math.round((parseISO(r.standzeit) - parseISO(r.date)) / 864e5) : null;
+  const guess = /^dyn\s/i.test(r.name) ? r.name.replace(/^(dyn\s+\S+(?:\s+\([A-Z]\))?)\s+.+$/i, '$1 {paarung}') : r.name.replace(/\d{1,3}\s*$/, '{nr}');
+  const m = showModal('Als Vorlage speichern', `<div class="form"><div class="f wide"><label for="sgTL">Name der Vorlage</label><input id="sgTL" class="input" value="${esc(r.name.replace(/\s*\d{1,3}\s*$/, ''))}"></div>
+    <div class="f wide"><label for="sgTN">Titelmuster</label><input id="sgTN" class="input" value="${esc(guess)}"><small class="muted">Platzhalter: <code>{paarung}</code> für Teams/Gegner, <code>{nr}</code> für fortlaufende Nummern.</small></div>
+    <div class="f wide"><label for="sgTS">Standzeit-Regel</label><select id="sgTS" class="input"><option value="none" ${!r.standzeit ? 'selected' : ''}>Unbegrenzt</option><option value="offset" ${diff != null && diff <= 35 ? 'selected' : ''}>Relativ: ${diff != null && diff <= 35 ? diff : 30} Tage nach Event</option><option value="fixed" ${diff != null && diff > 35 ? 'selected' : ''}>Festes Datum: ${r.standzeit ? fmtDate(r.standzeit) : '–'} (z. B. Saisonende)</option></select></div></div>`,
+    `<button class="btn" data-m="close">Abbrechen</button><button class="btn primary" id="sgTGo">Speichern</button>`);
+  $('#sgTGo', m).onclick = () => {
+    const keep = ['status', 'geo', 'mode', 'platforms', 'access', 'pass', 'commentator', 'commentatorWish', 'owner', 'contact', 'producerContact', 'cubaId', 'sport', 'feed', 'provider', 'adMode', 'recording', 'notes'];
+    const fields = {}; keep.forEach(k => { if (r[k] != null && r[k] !== '') fields[k] = JSON.parse(JSON.stringify(r[k])); });
+    const t = $('#sgTS', m).value;
+    sgTemplates().push({ id: uid(), label: $('#sgTL', m).value.trim() || r.name, name: $('#sgTN', m).value.trim() || r.name, wds: [parseISO(r.date).getDay()], start: r.start || '', end: r.end || '', stand: t === 'offset' ? { type: 'offset', days: diff != null && diff <= 35 ? diff : 30 } : t === 'fixed' ? { type: 'fixed', date: r.standzeit } : { type: 'none' }, fields });
+    persist(); closeModal(); toast('Vorlage gespeichert', 'ok');
+  };
+}
+function sgHelp() {
+  showModal('⌨ Tastenkürzel in der Tabelle', `<table class="t"><tbody>
+    <tr><td><kbd>Tab</kbd> / <kbd>⇧ Tab</kbd></td><td>Nächste / vorherige Zelle – in der letzten Zelle der letzten Zeile entsteht eine neue Zeile</td></tr>
+    <tr><td><kbd>Enter</kbd> / <kbd>⇧ Enter</kbd></td><td>Speichern und eine Zeile nach unten / oben (wie Excel)</td></tr>
+    <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>Zeile wechseln in Textzellen</td></tr>
+    <tr><td><kbd>Strg</kbd>+<kbd>D</kbd></td><td>Zeile duplizieren (gleicher Tag) – bei „Dyn …“ wird die Paarung zum Überschreiben markiert</td></tr>
+    <tr><td><kbd>Strg</kbd>+<kbd>⇧</kbd>+<kbd>D</kbd></td><td>Zeile eine Woche später anlegen (Standzeit +30 wandert mit, Nummer zählt hoch)</td></tr>
+    <tr><td><kbd>Strg</kbd>+<kbd>Enter</kbd></td><td>Neue leere Zeile am selben Tag</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>Eingabe in der Zelle verwerfen</td></tr></tbody></table>
+    <h3 style="margin-top:16px">Schnell tippen</h3><ul><li>Datum: <code>14.11.</code>, <code>14.11.26</code> oder <code>+7</code> (eine Woche später)</li><li>Uhrzeit: <code>2</code> → 02:00, <code>1630</code> → 16:30</li><li>Standzeit: leer = unbegrenzt, <code>+30</code> = 30 Tage nach Event</li><li>Plattformen: <code>bild, welt, youtube</code> – wird automatisch erkannt</li><li>Aus der alten Excel: ganze Zeilen kopieren und in die <b>Datum</b>-Zelle einfügen</li></ul>`, `<button class="btn primary" data-m="close">Alles klar</button>`);
+}
+Object.assign(ACTIONS, {
+  sgAdd: () => sgAddRow(document.activeElement && document.activeElement.dataset && document.activeElement.dataset.sgid),
+  sgDup: d => sgDuplicate([d.id], +d.n || 0),
+  sgRepeat: () => sgRepeatDialog(),
+  sgTpl: () => sgTplDialog(),
+  sgHelp: () => sgHelp(),
+  sgDelSel: async () => {
+    const recs = [...sgSel].map(sgRec).filter(r => r && can.del(r)); if (!recs.length) { toast('Keine Berechtigung zum Löschen der markierten Zeilen.', 'err'); return; }
+    if (!(await askConfirm(`${recs.length} Event${recs.length > 1 ? 's' : ''} löschen?\n\n${recs.slice(0, 8).map(r => `${fmtDate(r.date)} ${r.name}`).join('\n')}${recs.length > 8 ? '\n…' : ''}`))) return;
+    recs.forEach(r => { db.streams = db.streams.filter(x => x.id !== r.id); logActivity('streams', r, 'gelöscht', []); });
+    sgSel.clear(); persist(); render();
+  },
+});
+{ const _vs = VIEWS.streams; VIEWS.streams = main => { if (state.tab.streams === 'grid') { if (!sgCanUse()) { state.tab.streams = 'list'; return _vs(main); } sgTemplates(); return sgView(main); } return _vs(main); }; }
+
+/* =========================================================================
+   v0.28 Globale Suche auf der Übersicht + prominente Erfolgsmeldungen oben rechts
+   ========================================================================= */
+const HS_SRC = [
+  { coll: 'bookings', ic: '\uD83C\uDFAC', l: 'Studio-Termine' },
+  { coll: 'streams', ic: '\uD83D\uDCE1', l: 'Streams' },
+  { coll: 'makeup', ic: '\uD83D\uDC84', l: 'Maske' },
+  { coll: 'edits', ic: '✂️', l: 'Schnitte' },
+  { coll: 'requests', ic: '\uD83D\uDCE8', l: 'Anfragen' },
+  { coll: 'camReqs', ic: '\uD83C\uDFA5', l: 'Kamera-Anfragen' },
+  { coll: 'prodReqs', ic: '\uD83C\uDF99', l: 'Produktions-Anfragen' },
+  { coll: 'liveReqs', ic: '\uD83D\uDCE8', l: 'Live-Anfragen' },
+  { coll: 'assignments', ic: '\uD83D\uDC65', l: 'Personal-Einsätze' },
+  { coll: 'equipment', ic: '\uD83C\uDF92', l: 'Equipment' },
+  { coll: 'loans', ic: '\uD83D\uDD01', l: 'Ausleihen' },
+];
+let hsOpen = new Set(), hsIdx = -1, hsTimer = null;
+const hsNorm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ß/g, 'ss');
+function hsAllowed(coll) {
+  const mod = COLL_MOD[coll]; if (!mod) return false;
+  return navItems().some(m => m.id === mod || (mod === 'streams' && m.id === 'ads'));
+}
+const hsDate = r => r.date || r.workDate || r.deadline || r.from || '';
+function hsTime(coll, r) {
+  if (coll === 'bookings') return r.allDay ? 'ganztägig' : [r.start, r.end].filter(Boolean).join('–');
+  if (coll === 'streams') return r.kind === 'Hinweistag' ? 'Hinweistag' : [r.start, r.end].filter(Boolean).join('–');
+  if (coll === 'makeup') return r.start || '';
+  if (coll === 'loans') return r.to ? `bis ${fmtDate(r.to)}` : '';
+  return r.start || r.time || '';
+}
+function hsSub(coll, r) {
+  const p = [];
+  switch (coll) {
+    case 'bookings': p.push(studioById(r.studioId).name, r.type, r.status); break;
+    case 'streams': if (r.kind !== 'Hinweistag') p.push(r.status, (r.platforms || []).join(', '), r.access); else p.push(r.notes); break;
+    case 'makeup': p.push(r.kind, r.production, r.location); break;
+    case 'edits': p.push(r.status, r.redaktion, r.deadline ? 'Deadline ' + fmtDate(r.deadline) : ''); break;
+    case 'equipment': p.push(r.category, r.status, r.location, r.invNo ? 'Inv. ' + r.invNo : ''); break;
+    case 'loans': p.push(r.production, r.returned ? 'zurückgegeben' : 'ausgeliehen'); break;
+    case 'assignments': p.push(r.status, r.role); break;
+    default: p.push(r.status, r.source, r.production);
+  }
+  return p.filter(Boolean).join(' · ');
+}
+function hsHay(coll, r) {
+  const parts = [recTitle(coll, r), hsSub(coll, r)];
+  Object.entries(r).forEach(([k, v]) => {
+    if (/^(id|createdAt|updatedAt|createdBy|updatedBy|custom)$/.test(k)) return;
+    if (typeof v === 'string' && v.length < 400) parts.push(v);
+    else if (Array.isArray(v) && v.every(x => typeof x === 'string')) parts.push(v.join(' '));
+  });
+  if (r.custom) Object.values(r.custom).forEach(v => typeof v === 'string' && parts.push(v));
+  const d = hsDate(r); if (d) parts.push(fmtDate(d), fmtDate(d).slice(0, 6), wd(d));
+  if (coll === 'loans') { const e = db.equipment.find(x => x.id === r.equipmentId); if (e) parts.push(e.name, e.invNo || ''); }
+  if (coll === 'assignments' || coll === 'edits') { const s = staffById && staffById(r.staffId); if (s) parts.push(s.name || ''); }
+  return hsNorm(parts.join(' \u0001 '));
+}
+function homeSearch(q) {
+  const terms = hsNorm(q).split(/\s+/).filter(Boolean); if (!terms.length) return [];
+  const T = today(), out = [];
+  HS_SRC.forEach(src => {
+    if (!hsAllowed(src.coll)) return;
+    (db[src.coll] || []).forEach(r => {
+      const hay = hsHay(src.coll, r); if (!terms.every(t => hay.includes(t))) return;
+      const title = hsNorm(recTitle(src.coll, r)); let score = 0;
+      terms.forEach(t => { if (title.startsWith(t)) score += 30; else if (new RegExp('(^|[^a-z0-9])' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(title)) score += 20; else if (title.includes(t)) score += 10; });
+      const d = hsDate(r);
+      if (d) { const dist = Math.round((parseISO(d) - parseISO(T)) / 864e5); score += dist >= 0 ? Math.max(0, 20 - dist / 3) : Math.max(-10, dist / 10); }
+      if (r.status === 'Findet nicht statt' || r.status === 'Abgesagt' || r.returned) score -= 15;
+      out.push({ src, r, score, d });
+    });
+  });
+  return out.sort((a, b) => b.score - a.score);
+}
+function hsHighlight(text, q) {
+  let h = esc(text); const terms = q.split(/\s+/).filter(t => t.length > 1).map(t => esc(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (!terms.length) return h;
+  return h.replace(new RegExp(`(${terms.join('|')})`, 'gi'), '<mark>$1</mark>');
+}
+function hsResultsHtml(q) {
+  if (!q.trim()) return '';
+  const res = homeSearch(q), T = today();
+  if (!res.length) return `<div class="hs-empty">Nichts gefunden für „${esc(q)}“. Tipp: Teile eines Namens, ein Datum (z. B. <code>14.11.</code>), Studio, Inventar-Nr. oder Ansprechpartner probieren.</div>`;
+  const groups = HS_SRC.map(src => ({ src, items: res.filter(x => x.src === src) })).filter(g => g.items.length);
+  const best = groups.map(g => g.items[0].score);
+  groups.sort((a, b) => b.items[0].score - a.items[0].score);
+  let i = 0;
+  return `<div class="hs-count">${res.length} Treffer</div>` + groups.map(g => {
+    const all = hsOpen.has(g.src.coll), shown = all ? g.items : g.items.slice(0, 5);
+    return `<div class="hs-grp" role="group" aria-label="${esc(g.src.l)}"><div class="hs-gh">${g.src.ic} ${esc(g.src.l)} <span class="badge">${g.items.length}</span></div>
+      ${shown.map(({ src, r, d }) => `<div class="hs-item ${d && d < T ? 'past' : ''}" role="option" id="hs-o${i}" data-hsi="${i++}" data-hscoll="${src.coll}" data-hsid="${r.id}" tabindex="-1">
+        <div class="hs-when">${d ? `<b>${d === T ? 'Heute' : d === addDays(T, 1) ? 'Morgen' : `${wd(d)} ${fmtDate(d).slice(0, 6)}`}</b><small>${esc(hsTime(src.coll, r)) || (d.slice(0, 4) !== T.slice(0, 4) ? d.slice(0, 4) : '')}</small>` : `<b>${src.ic}</b>`}</div>
+        <div class="hs-main"><div class="hs-t">${hsHighlight(recTitle(src.coll, r), q)}</div><div class="hs-s">${hsHighlight(hsSub(src.coll, r), q)}</div></div>
+        <button class="btn small hs-go" data-hsgo="${src.coll}|${r.id}" tabindex="-1" title="Im Bereich anzeigen" aria-label="${esc(recTitle(src.coll, r))} im Bereich anzeigen">↗</button></div>`).join('')}
+      ${g.items.length > 5 ? `<button class="btn small hs-more" data-hsmore="${g.src.coll}">${all ? 'Weniger anzeigen' : `Alle ${g.items.length} anzeigen`}</button>` : ''}</div>`;
+  }).join('');
+}
+function hsHtml() {
+  const q = state.f.homeQ || '';
+  return `<div class="hs" id="homeSearch" role="search">
+    <div class="hs-box"><span class="hs-ic" aria-hidden="true">\uD83D\uDD0E</span>
+      <input id="hsInput" class="hs-in" type="search" value="${esc(q)}" placeholder="Suche in Terminen, Streams, Maske, Schnitt, Anfragen und Equipment …" aria-label="Alles durchsuchen" role="combobox" aria-expanded="${q ? 'true' : 'false'}" aria-controls="hsRes" aria-autocomplete="list" autocomplete="off">
+      <kbd class="hs-kbd" aria-hidden="true">/</kbd>${q ? '<button class="btn small ghost" data-hsclear aria-label="Suche leeren">✕</button>' : ''}</div>
+    <div id="hsRes" class="hs-res ${q ? '' : 'hidden'}" role="listbox" aria-label="Suchergebnisse">${hsResultsHtml(q)}</div></div>`;
+}
+function hsRefresh() {
+  const q = state.f.homeQ || '', box = $('#hsRes'), inp = $('#hsInput'); if (!box) return;
+  hsIdx = -1; box.innerHTML = hsResultsHtml(q); box.classList.toggle('hidden', !q.trim());
+  inp && inp.setAttribute('aria-expanded', q.trim() ? 'true' : 'false'); inp && inp.removeAttribute('aria-activedescendant');
+  const clr = $('[data-hsclear]'); if (q && !clr) $('.hs-box').insertAdjacentHTML('beforeend', '<button class="btn small ghost" data-hsclear aria-label="Suche leeren">✕</button>'); if (!q && clr) clr.remove();
+  saveUi();
+}
+function hsMark(n) {
+  const items = $$('#hsRes .hs-item'); if (!items.length) return;
+  hsIdx = (n + items.length) % items.length;
+  items.forEach((x, i) => x.classList.toggle('on', i === hsIdx));
+  items[hsIdx].scrollIntoView({ block: 'nearest' }); $('#hsInput').setAttribute('aria-activedescendant', items[hsIdx].id);
+}
+function hsBind() {
+  const root = $('#homeSearch'); if (!root) return;
+  const inp = $('#hsInput', root);
+  inp.addEventListener('input', () => { state.f.homeQ = inp.value; clearTimeout(hsTimer); hsTimer = setTimeout(hsRefresh, 120); });
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); hsMark(hsIdx + 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); hsMark(hsIdx - 1); }
+    else if (e.key === 'Enter') { e.preventDefault(); const it = $$('#hsRes .hs-item')[hsIdx < 0 ? 0 : hsIdx]; if (it) openRecord(it.dataset.hscoll, it.dataset.hsid, e.ctrlKey || e.metaKey); }
+    else if (e.key === 'Escape') { e.stopPropagation(); if (inp.value) { inp.value = ''; state.f.homeQ = ''; hsRefresh(); } else inp.blur(); }
+  });
+  root.addEventListener('click', e => {
+    const go = e.target.closest('[data-hsgo]'); if (go) { e.stopPropagation(); const [c, id] = go.dataset.hsgo.split('|'); openRecord(c, id, true); return; }
+    const more = e.target.closest('[data-hsmore]'); if (more) { const c = more.dataset.hsmore; hsOpen.has(c) ? hsOpen.delete(c) : hsOpen.add(c); hsRefresh(); return; }
+    if (e.target.closest('[data-hsclear]')) { state.f.homeQ = ''; inp.value = ''; hsRefresh(); inp.focus(); return; }
+    const it = e.target.closest('.hs-item'); if (it) openRecord(it.dataset.hscoll, it.dataset.hsid);
+  });
+}
+{ const _wd = widgetDashboard; widgetDashboard = function (main) { _wd(main); const tb = main.querySelector('.toolbar'); if (tb) tb.insertAdjacentHTML('afterend', hsHtml()); else main.insertAdjacentHTML('afterbegin', hsHtml()); hsBind(); }; }
+document.addEventListener('keydown', e => {
+  if (state.view !== 'dashboard' || !me) return;
+  const t = e.target, typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+  if (((e.key === '/' && !typing) || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) && $('#modalLayer').classList.contains('hidden')) { const i = $('#hsInput'); if (i) { e.preventDefault(); i.focus(); i.select(); } }
+});
+
+/* ---------- Erfolgsmeldung nach Anfrage: groß, oben rechts, mit Direktlink ---------- */
+function reqToast(msg, coll, id) {
+  const clean = String(msg).replace(/^\s*(\uD83D\uDCE8|\uD83C\uDFA5|\uD83C\uDF99|\uD83D\uDCE1|✅)\s*/u, '');
+  const [title, ...rest] = clean.split(/\s+–\s+/);
+  const detail = rest.join(' – ').replace(/^./, c => c.toUpperCase());
+  const DUR = 9000;
+  const t = document.createElement('div');
+  t.className = 'toast big ok'; t.setAttribute('role', 'alert');
+  t.innerHTML = `<div class="tb-ic" aria-hidden="true">✓</div><div class="tb-c"><b>${esc(title)}</b>${detail ? `<span>${esc(detail)}</span>` : ''}
+    <div class="tb-acts">${coll && id ? '<button class="btn small" data-tbopen>Anfrage ansehen</button>' : ''}<button class="btn small ghost" data-tbx>Schließen</button></div>
+    <div class="tb-bar" style="animation-duration:${DUR}ms"></div></div><button class="tb-x" data-tbx aria-label="Meldung schließen">✕</button>`;
+  let left = DUR, start = Date.now(), tm = null;
+  const close = () => { clearTimeout(tm); t.classList.add('out'); setTimeout(() => t.remove(), 220); };
+  const run = () => { start = Date.now(); tm = setTimeout(close, left); };
+  t.addEventListener('mouseenter', () => { clearTimeout(tm); left -= Date.now() - start; t.classList.add('paused'); });
+  t.addEventListener('mouseleave', () => { t.classList.remove('paused'); run(); });
+  t.addEventListener('focusin', () => { clearTimeout(tm); t.classList.add('paused'); });
+  t.addEventListener('click', e => {
+    e.stopPropagation();
+    if (e.target.closest('[data-tbx]')) return close();
+    if (e.target.closest('[data-tbopen]')) { close(); openRecord(coll, id, true); }
+  });
+  const box = $('#toasts'); box.prepend(t); run();
+}
 
 /* ---------- Start ---------- */
 (function init() {
