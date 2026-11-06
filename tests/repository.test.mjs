@@ -36,7 +36,7 @@ test('split sources reproduce the original standalone file byte-for-byte', async
     load('src/styles.css'),
     load('vendor/jszip.min.js'),
     load('src/app.js'),
-    load('standalone/ProductionHub_v0.24.html')
+    load('standalone/ProductionHub_v0.30.html')
   ]);
   const rebuilt = index
     .replace('<link rel="stylesheet" href="./src/styles.css">', () => `<style>\n${css}</style>`)
