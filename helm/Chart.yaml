@@ -2,7 +2,7 @@ apiVersion: v2
 name: next-production-hub-chart
 description: Static Production Hub browser application
 type: application
-version: 0.30.0
-appVersion: "0.30.0"
+version: 0.32.0
+appVersion: "0.32.0"
 sources:
   - https://github.com/mathiastrumminger/Production-Hub-BILD

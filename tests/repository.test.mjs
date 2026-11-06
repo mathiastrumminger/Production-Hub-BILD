@@ -44,3 +44,18 @@ test('split sources reproduce the original standalone file byte-for-byte', async
     .replace('<script src="./src/app.js"></script>', () => `<script>\n${app}</script>`);
   assert.equal(rebuilt, baseline);
 });
+
+test('HTML attributes in app.js use straight quotes so click handlers match', async () => {
+  const app = await load('src/app.js');
+  const bad = app.split('\n').map((l, i) => [i + 1, l]).filter(([, l]) => /[a-z-]=[”“]/.test(l));
+  assert.deepEqual(bad.map(([n]) => n), [], 'typografische Anführungszeichen in HTML-Attributen');
+});
+
+test('request wizard renders navigation buttons with matching data-wnav values', async () => {
+  const app = await load('src/app.js');
+  for (const nav of ['back', 'next', 'send', 'mail']) {
+    assert.match(app, new RegExp(`data-wnav="${nav}"`));
+    assert.match(app, new RegExp(`nv\\.dataset\\.wnav === '${nav}'`));
+  }
+  assert.match(app, /data-m="close">Abbrechen/);
+});
