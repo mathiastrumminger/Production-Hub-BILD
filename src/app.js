@@ -3851,12 +3851,21 @@ function reqWizard(pre = {}) {
     const nv = e.target.closest('[data-wnav]'); if (!nv) return;
     const key = wizSteps(w.type)[step];
     if (nv.dataset.wnav === 'back') { step = Math.max(0, step - 1); draw(); return; }
-    if (nv.dataset.wnav === 'next') { const err = valid(key === 'when' && w.type === 'Maske' ? 'mkwhen' : key); if (err) { $('#wzErr', m).innerHTML = `<div class="warnbox">${esc(err)}</div>`; return; } step++; draw(); return; }
+    if (nv.dataset.wnav === 'next') { const err = valid(key === 'when' && w.type === 'Maske' ? 'mkwhen' : key); if (err) { $('#wzErr', m).innerHTML = `<div class="warnbox">${esc(err)}</div>`; setTimeout(() => $('#wzErr', m).scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50); return; } step++; draw(); return; }
     if (nv.dataset.wnav === 'send' || nv.dataset.wnav === 'mail') {
       // Validiere letzten Schritt vor dem Senden
-      const lastKey = wizSteps(w.type)[wizSteps(w.type).length - 1];
-      const err = valid(lastKey === 'when' && w.type === 'Maske' ? 'mkwhen' : w.type === 'Kamera' ? 'cam' : w.type === 'Produktion' ? 'prod' : w.type === 'Live-Stream' ? 'live' : w.type === 'Schnitt' ? 'cut' : lastKey);
-      if (err) { $('#wzErr', m).innerHTML = `<div class="warnbox">${esc(err)}</div>`; return; }
+      const steps = wizSteps(w.type);
+      const lastStepKey = steps[steps.length - 1];
+      // Bestimme den korrekten Validierungskey
+      let validKey = lastStepKey;
+      if (lastStepKey === 'when' && w.type === 'Maske') validKey = 'mkwhen';
+      else if (lastStepKey === 'when' && w.type !== 'Maske') validKey = 'when';
+      const err = valid(validKey);
+      if (err) {
+        $('#wzErr', m).innerHTML = `<div class="warnbox">${esc(err)}</div>`;
+        setTimeout(() => $('#wzErr', m).scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
+        return;
+      }
       const [coll, id] = send();
       if (nv.dataset.wnav === 'mail') setTimeout(() => reqMailDialog(coll, id), 0);
     }
