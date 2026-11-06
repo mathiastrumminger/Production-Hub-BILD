@@ -3680,7 +3680,7 @@ function reqWizard(pre = {}) {
   let step = w.type ? 1 : 0;
   const setKind = () => { w.kind = w.type === 'Kamera' ? 'Schreibtisch-Talk' : w.type === 'Produktion' ? 'Interview' : ''; if (w.type === 'Produktion' && w.dur === 60) w.dur = 120; };
   setKind();
-  const m = showModal('📨 Neue Anfrage', '<div id="wz"></div>', '<div id="wzFooter"></div>');
+  const m = showModal('📨 Neue Anfrage', '<div id="wz"></div>', '');
   const chips = (field, list) => `<div class="pq-quick">${list.map(([l, v]) => `<button type="button" class="chip ${String(w[field]) === String(v) ? 'on' : ''}" data-wset="${field}" data-v="${esc(v)}">${esc(l)}</button>`).join('')}</div>`;
   const seg = (field, list) => `<div class="seg-ctl">${list.map(v => `<button type="button" class="seg-btn ${w[field] === v ? 'on' : ''}" data-wset="${field}" data-v="${esc(v)}">${esc(v)}</button>`).join('')}</div>`;
   const seg2 = (name, cur) => `<div class="seg-ctl">${['Herr', 'Dame'].map(v => `<button type="button" class="seg-btn ${cur === v ? 'on' : ''}" data-wg="${esc(name)}" data-v="${v}">${v}</button>`).join('')}</div>`;
@@ -3817,7 +3817,8 @@ function reqWizard(pre = {}) {
         <div class="wz-f"><label>Hinweise / Wünsche (optional)</label><textarea class="input" data-w="notes" rows="3" placeholder="${esc(notesPh())}">${esc(w.notes)}</textarea></div>`;
     }
     $('#wz', m).innerHTML = `<div class=”wz-steps”>${steps.map((k, i) => `<span class=”${i === step ? 'on' : i < step ? 'done' : ''}”>${i < step ? '✓' : i + 1} ${WIZ_LABEL[k]}</span>`).join('')}</div><div class=”wz-body”>${body}</div><div id=”wzErr”></div>`;
-    $('#wzFooter', m).innerHTML = `<button class=”btn left” data-m=”close”>Abbrechen</button>${step > 0 ? '<button class=”btn” data-wnav=”back”>‹ Zurück</button>' : ''}${step === steps.length - 1 ? '<button class=”btn” data-wnav=”mail”>✉️ Senden & per E-Mail ergänzen</button><button class=”btn primary” data-wnav=”send”>📨 Anfrage senden</button>' : key === 'type' ? '' : '<button class=”btn primary” data-wnav=”next”>Weiter ›</button>'}`;
+    const footer = $('.modal-f', m);
+    if (footer) footer.innerHTML = `<button class=”btn left” data-m=”close”>Abbrechen</button>${step > 0 ? '<button class=”btn” data-wnav=”back”>‹ Zurück</button>' : ''}${step === steps.length - 1 ? '<button class=”btn” data-wnav=”mail”>✉️ Senden & per E-Mail ergänzen</button><button class=”btn primary” data-wnav=”send”>📨 Anfrage senden</button>' : key === 'type' ? '' : '<button class=”btn primary” data-wnav=”next”>Weiter ›</button>'}`;
     const f = $('[data-w]', $('.wz-body', m)); if (f && !f.value && f.type !== 'date') setTimeout(() => f.focus(), 30);
   };
   const send = () => {
