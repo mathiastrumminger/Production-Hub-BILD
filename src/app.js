@@ -1269,6 +1269,22 @@ function knownGender(talent) {
   const r = (db.requests || []).filter(x => x.talent === talent && x.gender).sort((a, b) => b.updatedAt - a.updatedAt)[0];
   return r ? r.gender : '';
 }
+/* v0.31 Quick Wins: Geschlechts-Erkennung aus Vornamen */
+function guessGenderFromName(fullName) {
+  if (!fullName || typeof fullName !== 'string') return '';
+  // Extrahiere Vorname (erster Teil vor Leerzeichen)
+  const firstName = fullName.trim().split(/[\s,]+/)[0].toLowerCase();
+  if (!firstName) return '';
+  // Prüfe gespeicherte Zuordnungen
+  if (db.options.genderMap && db.options.genderMap[firstName]) return db.options.genderMap[firstName];
+  // Deutsche Vornamen-Datenbank
+  const MALE_NAMES = ['alexander','andreas','ben','benjamin','christian','daniel','david','elias','emil','felix','finn','florian','hans','jakob','jan','jonas','jonathan','julian','kai','kevin','leon','luca','lukas','manuel','markus','martin','max','maximilian','michael','moritz','nico','niklas','noah','oliver','paul','peter','philipp','raphael','robin','samuel','sebastian','simon','stefan','thomas','tim','tobias','tom'];
+  const FEMALE_NAMES = ['alexandra','amelie','anna','anne','antonia','charlotte','clara','elena','elisa','elisabeth','ella','emilia','emily','emma','hannah','hanna','ida','johanna','josephine','julia','jule','katharina','lara','laura','lea','lena','leni','leonie','lilly','lina','lisa','luisa','luise','maja','maria','marie','mia','mila','nele','paula','sarah','sarah','sofia','sophia','sophie','theresa'];
+  if (MALE_NAMES.includes(firstName)) return 'Herr';
+  if (FEMALE_NAMES.includes(firstName)) return 'Dame';
+  // Unbekannt
+  return '';
+}
 /* Masken-Fenster einer Anfrage (geschätzt aus Sendebeginn + Herr/Dame) */
 function reqMkWindow(r) {
   if (r.mkStart) { const d = +r.mkDuration || mkStdDur(r.gender || 'Herr'); const s = tmin(r.mkStart); return { s, e: s + d, start: r.mkStart, duration: d }; }
@@ -1315,7 +1331,11 @@ function mkOnChange(form, name, opts) {
   const v = n => ($(`[name="${n}"]`, form) || {}).value || '';
   const set = (n, val) => { const el = $(`[name="${n}"]`, form); if (el && val != null) el.value = val; };
   if (name === 'kind') { opts._kindManual = true; return; }
-  if (name === 'talent' && !v('gender')) { const g = knownGender(v('talent')); if (g) { set('gender', g); toast(`${esc(v('talent'))}: ${g} (gemerkt)`, 'ok'); name = 'gender'; } }
+  if (name === 'talent' && !v('gender')) {
+    let g = knownGender(v('talent'));
+    if (!g) g = guessGenderFromName(v('talent'));
+    if (g) { set('gender', g); toast(`${esc(v('talent'))}: ${g} ${!knownGender(v('talent')) ? '(automatisch erkannt)' : '(gemerkt)'}`, 'ok'); name = 'gender'; }
+  }
   if (['gender', 'bookingId', 'arrival', 'date'].includes(name)) {
     const b = db.bookings.find(x => x.id === v('bookingId'));
     if (b && name === 'bookingId') { if (!v('production')) set('production', b.title); if (!v('talent') && splitNames(b.guests).length === 1) set('talent', b.guests); }
@@ -3643,7 +3663,7 @@ function wizTilesHtml() {
 }
 function reqWizard(pre = {}) {
   const T = today();
-  const w = { kind: '', place: '', contact: '', setupMinutes: 60, protagonists: 1, interviewers: 1, publishDate: '', binden: '', themen: '', sourceText: '', materialPath: '', genders: {}, source: 'Reuters', start: '', end: '', until: '', access: 'Free', recording: [], platforms: ['BILD'], type: pre.type || '', date: pre.date || addDays(T, 1), time: pre.time || '', dur: 60, production: pre.production || '', talent: '', gender: '', location: (db.options.mkLocations || MK_LOCS).find(x => /7\.?\s*OG/i.test(x)) || MK_LOCS[0], studioId: pre.studioId || '', title: pre.title || '', deadline: addDays(T, 1), deadlineTime: '', mkStart: '', mkDur: '', priority: 'Normal', output: '', notes: '' };
+  const w = { kind: '', place: '', contact: me.name, setupMinutes: 60, protagonists: 1, interviewers: 1, publishDate: '', binden: '', themen: '', sourceText: '', materialPath: '', genders: {}, source: 'Reuters', start: '', end: '', until: '', access: 'Free', recording: [], platforms: ['BILD'], type: pre.type || '', date: pre.date || addDays(T, 1), time: pre.time || '', dur: 60, production: pre.production || '', talent: '', gender: '', location: (db.options.mkLocations || MK_LOCS).find(x => /7\.?\s*OG/i.test(x)) || MK_LOCS[0], studioId: pre.studioId || '', title: pre.title || '', deadline: addDays(T, 1), deadlineTime: '', mkStart: '', mkDur: '', priority: 'Normal', output: '', notes: '' };
   let step = w.type ? 1 : 0;
   const setKind = () => { w.kind = w.type === 'Kamera' ? 'Schreibtisch-Talk' : w.type === 'Produktion' ? 'Interview' : ''; if (w.type === 'Produktion' && w.dur === 60) w.dur = 120; };
   setKind();
@@ -3670,8 +3690,8 @@ function reqWizard(pre = {}) {
     return '';
   };
   const buildLive = () => ({ title: w.title.trim(), source: w.source, sourceText: w.sourceText.trim(), date: w.date, until: w.until && w.until > w.date ? w.until : '', start: w.start, end: w.end, access: w.access, platforms: w.platforms, recording: w.recording, notes: w.notes, status: 'Angefragt', watchers: [], custom: {} });
-  const buildCam = () => ({ kind: w.kind, title: w.title.trim(), date: w.date, start: w.time, end: endTime(), place: w.place.trim(), contact: w.contact.trim(), notes: w.notes, status: 'Angefragt', custom: {} });
-  const buildProd = () => ({ kind: w.kind, title: w.title.trim(), date: w.date, start: w.time, end: endTime(), place: w.place.trim(), contact: w.kind === 'Außendreh' ? w.contact.trim() : '', setupMinutes: w.kind === 'Außendreh' ? (+w.setupMinutes || 60) : 0, protagonists: +w.protagonists || 0, interviewers: +w.interviewers || 0, publishDate: w.publishDate, binden: w.binden.trim(), themen: w.themen.trim(), notes: w.notes, status: 'Angefragt', custom: {} });
+  const buildCam = () => ({ kind: w.kind, title: w.title.trim(), date: w.date, start: w.time, end: endTime(), place: w.place.trim(), contact: w.contact.trim() || me.name, notes: w.notes, status: 'Angefragt', custom: {} });
+  const buildProd = () => ({ kind: w.kind, title: w.title.trim(), date: w.date, start: w.time, end: endTime(), place: w.place.trim(), contact: w.kind === 'Außendreh' ? (w.contact.trim() || me.name) : '', setupMinutes: w.kind === 'Außendreh' ? (+w.setupMinutes || 60) : 0, protagonists: +w.protagonists || 0, interviewers: +w.interviewers || 0, publishDate: w.publishDate, binden: w.binden.trim(), themen: w.themen.trim(), notes: w.notes, status: 'Angefragt', custom: {} });
   const summary = () => w.type === 'Kamera' ? reqLines('camReqs', buildCam()) : w.type === 'Produktion' ? reqLines('prodReqs', buildProd()) : w.type === 'Live-Stream' ? reqLines('liveReqs', buildLive()) : w.type === 'Schnitt' ? reqLines('edits', buildEdit()) : reqLines('requests', buildReq());
   const draw = () => {
     const steps = wizSteps(w.type), key = steps[Math.min(step, steps.length - 1)];
