@@ -37,10 +37,11 @@ main{flex:1;overflow:auto;padding:18px 22px 40px}
 .tab{padding:6px 12px;border-radius:7px;cursor:pointer;color:var(--muted);white-space:nowrap}
 .tab.active{background:var(--panel3);color:#fff}
 .tab .badge{margin-left:6px}
-.btn{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 12px;cursor:pointer;white-space:nowrap}
+.btn{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 12px;cursor:pointer;white-space:nowrap;color:var(--text)}
 .btn:hover{background:var(--panel3)}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
 .btn.primary:hover{background:var(--accent2)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
 .btn.danger{color:#fca5a5;border-color:#5b2323}
 .btn.small{padding:4px 8px;font-size:12px}
 .btn.ghost{background:transparent}
