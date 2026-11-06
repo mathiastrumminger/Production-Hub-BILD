@@ -1,6 +1,6 @@
 replicaCount: 2
 image: ghcr.io/mathiastrumminger/production-hub-bild
-tag: 0.24.1
+tag: 0.30.0
 imagePullPolicy: IfNotPresent
 imagePullSecrets:
   - name: production-hub-imagepull-secret
