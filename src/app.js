@@ -3817,7 +3817,7 @@ function reqWizard(pre = {}) {
         <div class="wz-f"><label>Hinweise / Wünsche (optional)</label><textarea class="input" data-w="notes" rows="3" placeholder="${esc(notesPh())}">${esc(w.notes)}</textarea></div>`;
     }
     $('#wz', m).innerHTML = `<div class=”wz-steps”>${steps.map((k, i) => `<span class=”${i === step ? 'on' : i < step ? 'done' : ''}”>${i < step ? '✓' : i + 1} ${WIZ_LABEL[k]}</span>`).join('')}</div><div class=”wz-body”>${body}</div><div id=”wzErr”></div>
-      <div class=”modal-f” style=”margin:16px -16px -16px”>${step > 0 ? '<button class=”btn left” data-wnav=”back”>‹ Zurück</button>' : '<span class=”left”></span>'}<button class=”btn” data-m=”close”>Abbrechen</button>${step === steps.length - 1 ? '<button class=”btn” data-wnav=”mail”>✉️ Senden & per E-Mail ergänzen</button><button class=”btn primary” data-wnav=”send”>📨 Anfrage senden</button>' : key === 'type' ? '' : '<button class=”btn primary” data-wnav=”next”>Weiter ›</button>'}</div>`;
+      <div class=”modal-f” style=”margin:16px -16px -16px”><button class=”btn left” data-m=”close”>Abbrechen</button>${step > 0 ? '<button class=”btn” data-wnav=”back”>‹ Zurück</button>' : ''}${step === steps.length - 1 ? '<button class=”btn” data-wnav=”mail”>✉️ Senden & per E-Mail ergänzen</button><button class=”btn primary” data-wnav=”send”>📨 Anfrage senden</button>' : key === 'type' ? '' : '<button class=”btn primary” data-wnav=”next”>Weiter ›</button>'}</div>`;
     const f = $('[data-w]', $('.wz-body', m)); if (f && !f.value && f.type !== 'date') setTimeout(() => f.focus(), 30);
   };
   const send = () => {
@@ -3852,7 +3852,14 @@ function reqWizard(pre = {}) {
     const key = wizSteps(w.type)[step];
     if (nv.dataset.wnav === 'back') { step = Math.max(0, step - 1); draw(); return; }
     if (nv.dataset.wnav === 'next') { const err = valid(key === 'when' && w.type === 'Maske' ? 'mkwhen' : key); if (err) { $('#wzErr', m).innerHTML = `<div class="warnbox">${esc(err)}</div>`; return; } step++; draw(); return; }
-    if (nv.dataset.wnav === 'send' || nv.dataset.wnav === 'mail') { const [coll, id] = send(); if (nv.dataset.wnav === 'mail') setTimeout(() => reqMailDialog(coll, id), 0); }
+    if (nv.dataset.wnav === 'send' || nv.dataset.wnav === 'mail') {
+      // Validiere letzten Schritt vor dem Senden
+      const lastKey = wizSteps(w.type)[wizSteps(w.type).length - 1];
+      const err = valid(lastKey === 'when' && w.type === 'Maske' ? 'mkwhen' : w.type === 'Kamera' ? 'cam' : w.type === 'Produktion' ? 'prod' : w.type === 'Live-Stream' ? 'live' : w.type === 'Schnitt' ? 'cut' : lastKey);
+      if (err) { $('#wzErr', m).innerHTML = `<div class="warnbox">${esc(err)}</div>`; return; }
+      const [coll, id] = send();
+      if (nv.dataset.wnav === 'mail') setTimeout(() => reqMailDialog(coll, id), 0);
+    }
   });
   draw();
 }
