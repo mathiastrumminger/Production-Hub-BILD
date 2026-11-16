@@ -30,18 +30,20 @@ test('vendored JSZip remains available offline', async () => {
   assert.match(source, /JSZip/);
 });
 
-test('split sources reproduce the original standalone file byte-for-byte', async () => {
-  const [index, css, jszip, app, baseline] = await Promise.all([
+test('split sources reproduce the current standalone file byte-for-byte', async () => {
+  const [index, css, jszip, app, pkg] = await Promise.all([
     load('index.html'),
     load('src/styles.css'),
     load('vendor/jszip.min.js'),
     load('src/app.js'),
-    load('standalone/ProductionHub_v0.30.html')
+    load('package.json').then(JSON.parse)
   ]);
   const rebuilt = index
     .replace('<link rel="stylesheet" href="./src/styles.css">', () => `<style>\n${css}</style>`)
     .replace('<script src="./vendor/jszip.min.js"></script>', () => `<script>${jszip}</script>`)
     .replace('<script src="./src/app.js"></script>', () => `<script>\n${app}</script>`);
+  const version = pkg.version.replace(/\.0$/, '');
+  const baseline = await load(`standalone/ProductionHub_v${version}.html`);
   assert.equal(rebuilt, baseline);
 });
 
