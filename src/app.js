@@ -1269,6 +1269,22 @@ function knownGender(talent) {
   const r = (db.requests || []).filter(x => x.talent === talent && x.gender).sort((a, b) => b.updatedAt - a.updatedAt)[0];
   return r ? r.gender : '';
 }
+/* v0.31 Quick Wins: Geschlechts-Erkennung aus Vornamen */
+function guessGenderFromName(fullName) {
+  if (!fullName || typeof fullName !== 'string') return '';
+  // Extrahiere Vorname (erster Teil vor Leerzeichen)
+  const firstName = fullName.trim().split(/[\s,]+/)[0].toLowerCase();
+  if (!firstName) return '';
+  // Prüfe gespeicherte Zuordnungen
+  if (db.options.genderMap && db.options.genderMap[firstName]) return db.options.genderMap[firstName];
+  // Deutsche Vornamen-Datenbank
+  const MALE_NAMES = ['alexander','andreas','ben','benjamin','christian','daniel','david','elias','emil','felix','finn','florian','hans','jakob','jan','jonas','jonathan','julian','kai','kevin','leon','luca','lukas','manuel','markus','martin','max','maximilian','michael','moritz','nico','niklas','noah','oliver','paul','peter','philipp','raphael','robin','samuel','sebastian','simon','stefan','thomas','tim','tobias','tom'];
+  const FEMALE_NAMES = ['alexandra','amelie','anna','anne','antonia','charlotte','clara','elena','elisa','elisabeth','ella','emilia','emily','emma','hannah','hanna','ida','johanna','josephine','julia','jule','katharina','lara','laura','lea','lena','leni','leonie','lilly','lina','lisa','luisa','luise','maja','maria','marie','mia','mila','nele','paula','sarah','sarah','sofia','sophia','sophie','theresa'];
+  if (MALE_NAMES.includes(firstName)) return 'Herr';
+  if (FEMALE_NAMES.includes(firstName)) return 'Dame';
+  // Unbekannt
+  return '';
+}
 /* Masken-Fenster einer Anfrage (geschätzt aus Sendebeginn + Herr/Dame) */
 function reqMkWindow(r) {
   if (r.mkStart) { const d = +r.mkDuration || mkStdDur(r.gender || 'Herr'); const s = tmin(r.mkStart); return { s, e: s + d, start: r.mkStart, duration: d }; }
@@ -1315,7 +1331,11 @@ function mkOnChange(form, name, opts) {
   const v = n => ($(`[name="${n}"]`, form) || {}).value || '';
   const set = (n, val) => { const el = $(`[name="${n}"]`, form); if (el && val != null) el.value = val; };
   if (name === 'kind') { opts._kindManual = true; return; }
-  if (name === 'talent' && !v('gender')) { const g = knownGender(v('talent')); if (g) { set('gender', g); toast(`${esc(v('talent'))}: ${g} (gemerkt)`, 'ok'); name = 'gender'; } }
+  if (name === 'talent' && !v('gender')) {
+    let g = knownGender(v('talent'));
+    if (!g) g = guessGenderFromName(v('talent'));
+    if (g) { set('gender', g); toast(`${esc(v('talent'))}: ${g} ${!knownGender(v('talent')) ? '(automatisch erkannt)' : '(gemerkt)'}`, 'ok'); name = 'gender'; }
+  }
   if (['gender', 'bookingId', 'arrival', 'date'].includes(name)) {
     const b = db.bookings.find(x => x.id === v('bookingId'));
     if (b && name === 'bookingId') { if (!v('production')) set('production', b.title); if (!v('talent') && splitNames(b.guests).length === 1) set('talent', b.guests); }
@@ -2218,7 +2238,20 @@ function onAdminChange(el) {
   persist(); toast('Gespeichert', 'ok'); render();
 }
 /* ---------- Glocke ---------- */
-function toggleBell() { const p = $('#bellPanel'); if (!p.classList.contains('hidden')) { closeBell(); return; } renderBell(); p.classList.remove('hidden'); }
+function toggleBell() {
+  const p = $('#bellPanel');
+  if (!p.classList.contains('hidden')) { closeBell(); return; }
+  renderBell();
+  p.classList.remove('hidden');
+  // Nur sichtbare Benachrichtigungen als gesehen markieren
+  const items = db.activity.filter(a => a.userId !== me.id && a.ts > (me.since || 0) && visibleAct(a));
+  items.forEach(a => {
+    const rec = (db[a.coll] || []).find(x => x.id === a.entityId);
+    if (rec) markSeen(rec, false);
+  });
+  persist();
+  renderNavBadges();
+}
 function closeBell() { $('#bellPanel').classList.add('hidden'); }
 function renderBell() {
   const items = db.activity.filter(a => a.userId !== me.id && a.ts > (me.since || 0) && visibleAct(a)).sort((a, b) => b.ts - a.ts).slice(0, 40);
@@ -3633,9 +3666,9 @@ function vpCard(st, D) {
 }
 /* ---------- Anfrage-Assistent (Schritt für Schritt) ---------- */
 const WIZ_TYPES = [['Kamera', '🎥', 'Vertraulich · Schreibtisch-Talk'], ['Produktion', '🎙', 'Interview · Außendreh'], ['Live-Stream', '📡', 'Externes Signal live (z. B. Reuters, dpa, AP)'], ['Maske', '💄', 'Maske für Gast / Talent'], ['Studio', '🎬', 'Studio buchen'], ['Studio + Maske', '🎬💄', 'Studio inkl. Maske'], ['Schnitt', '✂️', 'Beitrag schneiden lassen']];
-const wizSteps = t => t === 'Kamera' ? ['type', 'cam', 'sum'] : t === 'Produktion' ? ['type', 'prod', 'binden', 'sum'] : wizStepsA(t);
-const wizStepsA = t => t === 'Live-Stream' ? ['type', 'live', 'sum'] : wizSteps0(t);
-const wizSteps0 = t => t === 'Maske' ? ['type', 'who', 'when', 'sum'] : t === 'Studio' ? ['type', 'when', 'studio', 'sum'] : t === 'Studio + Maske' ? ['type', 'when', 'studio', 'who', 'sum'] : t === 'Schnitt' ? ['type', 'cut', 'sum'] : ['type'];
+const wizSteps = t => t === 'Kamera' ? ['type', 'cam'] : t === 'Produktion' ? ['type', 'prod', 'binden'] : wizStepsA(t);
+const wizStepsA = t => t === 'Live-Stream' ? ['type', 'live'] : wizSteps0(t);
+const wizSteps0 = t => t === 'Maske' ? ['type', 'who', 'when'] : t === 'Studio' ? ['type', 'when', 'studio'] : t === 'Studio + Maske' ? ['type', 'when', 'studio', 'who'] : t === 'Schnitt' ? ['type', 'cut'] : ['type'];
 const WIZ_LABEL = { cam: 'Wann & wo?', prod: 'Was & wann?', binden: 'Bauchbinden & Themen', live: 'Was & wann?',  type: 'Was?', when: 'Wann & wofür?', mkwhen: 'Freies Zeitfenster', who: 'Wer?', studio: 'Welches Studio?', cut: 'Welcher Schnitt?', sum: 'Prüfen & senden' };
 const reqMailTo = () => (db.options && db.options.requestMail) || 'pm@bild.de';
 function wizTilesHtml() {
@@ -3643,11 +3676,11 @@ function wizTilesHtml() {
 }
 function reqWizard(pre = {}) {
   const T = today();
-  const w = { kind: '', place: '', contact: '', setupMinutes: 60, protagonists: 1, interviewers: 1, publishDate: '', binden: '', themen: '', sourceText: '', materialPath: '', genders: {}, source: 'Reuters', start: '', end: '', until: '', access: 'Free', recording: [], platforms: ['BILD'], type: pre.type || '', date: pre.date || addDays(T, 1), time: pre.time || '', dur: 60, production: pre.production || '', talent: '', gender: '', location: (db.options.mkLocations || MK_LOCS).find(x => /7\.?\s*OG/i.test(x)) || MK_LOCS[0], studioId: pre.studioId || '', title: pre.title || '', deadline: addDays(T, 1), deadlineTime: '', mkStart: '', mkDur: '', priority: 'Normal', output: '', notes: '' };
+  const w = { kind: '', place: '', contact: me.name, setupMinutes: 60, protagonists: 1, interviewers: 1, publishDate: '', binden: '', themen: '', sourceText: '', materialPath: '', genders: {}, source: 'Reuters', start: '', end: '', until: '', access: 'Free', recording: [], platforms: ['BILD'], type: pre.type || '', date: pre.date || addDays(T, 1), time: pre.time || '', dur: 60, production: pre.production || '', talent: '', gender: '', location: (db.options.mkLocations || MK_LOCS).find(x => /7\.?\s*OG/i.test(x)) || MK_LOCS[0], studioId: pre.studioId || '', title: pre.title || '', deadline: addDays(T, 1), deadlineTime: '', mkStart: '', mkDur: '', priority: 'Normal', output: '', notes: '' };
   let step = w.type ? 1 : 0;
   const setKind = () => { w.kind = w.type === 'Kamera' ? 'Schreibtisch-Talk' : w.type === 'Produktion' ? 'Interview' : ''; if (w.type === 'Produktion' && w.dur === 60) w.dur = 120; };
   setKind();
-  const m = showModal('📨 Neue Anfrage', '<div id="wz"></div>', null);
+  const m = showModal('📨 Neue Anfrage', '<div id="wz"></div>', '');
   const chips = (field, list) => `<div class="pq-quick">${list.map(([l, v]) => `<button type="button" class="chip ${String(w[field]) === String(v) ? 'on' : ''}" data-wset="${field}" data-v="${esc(v)}">${esc(l)}</button>`).join('')}</div>`;
   const seg = (field, list) => `<div class="seg-ctl">${list.map(v => `<button type="button" class="seg-btn ${w[field] === v ? 'on' : ''}" data-wset="${field}" data-v="${esc(v)}">${esc(v)}</button>`).join('')}</div>`;
   const seg2 = (name, cur) => `<div class="seg-ctl">${['Herr', 'Dame'].map(v => `<button type="button" class="seg-btn ${cur === v ? 'on' : ''}" data-wg="${esc(name)}" data-v="${v}">${v}</button>`).join('')}</div>`;
@@ -3662,16 +3695,16 @@ function reqWizard(pre = {}) {
     if (key === 'live' && needsSrcText(w.source) && w.source !== 'Veranstalter-Stream' && !w.sourceText.trim()) return 'Bitte den Link oder eine Angabe zur Quelle eintragen.';
     if (key === 'live') return !w.title.trim() ? 'Bitte das Thema angeben.' : !w.date ? 'Bitte ein Datum wählen.' : !w.start ? 'Bitte die Startzeit angeben.' : '';
     if (key === 'type') return w.type ? '' : 'Bitte auswählen, was benötigt wird.';
-    if (key === 'mkwhen') return !w.date ? 'Bitte ein Datum wählen.' : !w.mkStart ? 'Bitte ein freies Zeitfenster bzw. eine Uhrzeit wählen.' : !w.production.trim() ? 'Bitte Sendung / Format angeben.' : '';
-    if (key === 'when') return !w.date ? 'Bitte ein Datum wählen.' : !w.time ? 'Bitte den Sende- bzw. Drehbeginn angeben.' : !w.production.trim() ? 'Bitte Sendung / Format angeben.' : '';
+    if (key === 'mkwhen') return !w.date ? 'Bitte ein Datum wählen.' : !w.mkStart ? 'Bitte ein freies Zeitfenster bzw. eine Uhrzeit wählen.' : '';
+    if (key === 'when') return !w.date ? 'Bitte ein Datum wählen.' : !w.time ? 'Bitte den Sende- bzw. Drehbeginn angeben.' : '';
     if (key === 'who') { const ns = splitNames(w.talent); return !ns.length ? 'Bitte den Namen des Gastes angeben.' : ''; }
     if (key === 'studio') return w.studioId ? '' : 'Bitte ein Studio wählen.';
     if (key === 'cut') return !w.title.trim() ? 'Bitte das Thema angeben.' : !w.deadline ? 'Bitte eine Abgabe wählen.' : '';
     return '';
   };
   const buildLive = () => ({ title: w.title.trim(), source: w.source, sourceText: w.sourceText.trim(), date: w.date, until: w.until && w.until > w.date ? w.until : '', start: w.start, end: w.end, access: w.access, platforms: w.platforms, recording: w.recording, notes: w.notes, status: 'Angefragt', watchers: [], custom: {} });
-  const buildCam = () => ({ kind: w.kind, title: w.title.trim(), date: w.date, start: w.time, end: endTime(), place: w.place.trim(), contact: w.contact.trim(), notes: w.notes, status: 'Angefragt', custom: {} });
-  const buildProd = () => ({ kind: w.kind, title: w.title.trim(), date: w.date, start: w.time, end: endTime(), place: w.place.trim(), contact: w.kind === 'Außendreh' ? w.contact.trim() : '', setupMinutes: w.kind === 'Außendreh' ? (+w.setupMinutes || 60) : 0, protagonists: +w.protagonists || 0, interviewers: +w.interviewers || 0, publishDate: w.publishDate, binden: w.binden.trim(), themen: w.themen.trim(), notes: w.notes, status: 'Angefragt', custom: {} });
+  const buildCam = () => ({ kind: w.kind, title: w.title.trim(), date: w.date, start: w.time, end: endTime(), place: w.place.trim(), contact: w.contact.trim() || me.name, notes: w.notes, status: 'Angefragt', custom: {} });
+  const buildProd = () => ({ kind: w.kind, title: w.title.trim(), date: w.date, start: w.time, end: endTime(), place: w.place.trim(), contact: w.kind === 'Außendreh' ? (w.contact.trim() || me.name) : '', setupMinutes: w.kind === 'Außendreh' ? (+w.setupMinutes || 60) : 0, protagonists: +w.protagonists || 0, interviewers: +w.interviewers || 0, publishDate: w.publishDate, binden: w.binden.trim(), themen: w.themen.trim(), notes: w.notes, status: 'Angefragt', custom: {} });
   const summary = () => w.type === 'Kamera' ? reqLines('camReqs', buildCam()) : w.type === 'Produktion' ? reqLines('prodReqs', buildProd()) : w.type === 'Live-Stream' ? reqLines('liveReqs', buildLive()) : w.type === 'Schnitt' ? reqLines('edits', buildEdit()) : reqLines('requests', buildReq());
   const draw = () => {
     const steps = wizSteps(w.type), key = steps[Math.min(step, steps.length - 1)];
@@ -3680,7 +3713,7 @@ function reqWizard(pre = {}) {
     if (key === 'when' && w.type !== 'Maske') body = `<div class="wz-f"><label>Datum</label>${chips('date', [['Heute', T], ['Morgen', addDays(T, 1)], ['Übermorgen', addDays(T, 2)]])}${inp('date', 'date')}</div>
       <div class="wz-f"><label>${/Studio/.test(w.type) ? 'Beginn' : 'Sende- / Drehbeginn'}</label>${chips('time', ['09:00', '10:00', '11:00', '12:00', '14:00', '16:00', '18:00'].map(x => [x, x]))}${inp('time', 'time')}</div>
       ${/Studio/.test(w.type) ? `<div class="wz-f"><label>Dauer</label>${chips('dur', [['30 Min.', 30], ['1 Std.', 60], ['1,5 Std.', 90], ['2 Std.', 120]])}${w.time ? `<span class="muted">bis ${endTime()}</span>` : ''}</div>` : ''}
-      <div class="wz-f"><label>Sendung / Format</label>${inp('production', 'text', 'z. B. Show-Talk', 'titles')}</div>`;
+      <div class="wz-f"><label>Sendung / Format <span class="muted" style="font-weight:400">– optional</span></label>${inp('production', 'text', 'z. B. Show-Talk', 'titles')}</div>`;
     if (key === 'when' && w.type === 'Maske') {
       const need = mkNeed(w), fw = mkFreeWindows(w.date, need), names = splitNames(w.talent);
       const stdTxt = names.length ? names.map(n => `${esc(n)} ${mkStdDur(w.genders[n] || 'Herr')} Min.`).join(' · ') : '';
@@ -3693,19 +3726,19 @@ function reqWizard(pre = {}) {
       const span = fw.close - fw.open, pct = m2 => ((m2 - fw.open) / span * 100).toFixed(2);
       const segs = []; for (let t = fw.open; t < fw.close; t += 15) { const c = Math.max(...[0, 5, 10].map(o => mkCountAt(fw.items, t + o))); segs.push(`<i class="mkb-s ${c >= need.cap ? 'full' : c ? 'part' : ''}" style="left:${pct(t)}%;width:${(15 / span * 100).toFixed(2)}%"></i>`); }
       const pick = w.mkStart ? `<i class="mkb-pick ${chosenOk ? '' : 'bad'}" style="left:${pct(tmin(w.mkStart))}%;width:${(need.len / span * 100).toFixed(2)}%"></i>` : '';
-      const scale = []; for (let h = Math.ceil(fw.open / 120) * 120; h <= fw.close; h += 120) scale.push(`<span style="left:${pct(h)}%">${pad(h / 60)}</span>`);
       body = `<div class="wz-f"><label>Datum</label>${chips('date', [['Heute', T], ['Morgen', addDays(T, 1)], ['Übermorgen', addDays(T, 2)]])}${inp('date', 'date')}</div>
       <div class="wz-f"><label>Benötigte Zeit in der Maske <span class="muted" style="font-weight:400">– optional</span></label>
         <div class="pq-quick">${[['Standard', ''], ['15 Min.', 15], ['30 Min.', 30], ['45 Min.', 45], ['60 Min.', 60], ['90 Min.', 90]].map(([l, v]) => `<button type="button" class="chip ${String(w.mkDur || '') === String(v) ? 'on' : ''}" data-wmkdur="${v}">${l}</button>`).join('')}
         <span class="pq-row"><input class="input mk-durin" type="number" min="5" max="240" step="5" data-w="mkDur" value="${esc(w.mkDur || '')}" placeholder="Min." aria-label="Benötigte Zeit in Minuten"><span class="muted">Min.</span></span></div>
         <span class="muted" style="font-size:0.75rem">${need.auto ? `Standard laut Maske: ${stdTxt}` : `${need.dur} Min. pro Person`}${need.n > 1 ? ` · ${need.n} Personen, max. ${need.cap} gleichzeitig → Fenster ${need.len} Min.` : ''}</span></div>
       <div class="wz-f"><label>Freie Zeitfenster am ${WDL[parseISO(w.date).getDay()]}, ${fmtDate(w.date)} <span class="muted" style="font-weight:400">– Startzeit antippen</span></label>
-        <div class="mkbar" aria-hidden="true"><div class="mkb-track">${segs.join('')}${pick}</div><div class="mkb-scale">${scale.join('')}</div></div>
+        <div class="mkbar" aria-hidden="true"><div class="mkb-track">${segs.join('')}${pick}</div></div>
         <div class="legend"><span><i style="background:rgba(34,197,94,.35)"></i>frei</span><span><i style="background:rgba(234,179,8,.75)"></i>teilweise belegt</span><span><i style="background:rgba(239,68,68,.85)"></i>voll</span>${w.mkStart ? '<span><i style="background:#fff"></i>deine Auswahl</span>' : ''}</div>
         ${fw.wins.length ? `<div class="mkws">${fw.wins.map(win).join('')}</div>` : `<div class="warnbox">An diesem Tag ist in der Maske kein passendes Fenster mehr frei${need.auto ? '' : ' – evtl. kürzere Zeit wählen'}. Du kannst trotzdem eine Uhrzeit angeben, die Produktion meldet sich.</div>`}
         <div class="pq-row" style="margin-top:8px"><span class="muted">Andere Uhrzeit:</span><input class="input" type="time" step="300" data-w="mkStart" value="${esc(w.mkStart || '')}" aria-label="Eigene Startzeit Maske"></div>
         ${w.mkStart ? `<div class="${chosenOk ? 'okbox' : 'warnbox'}">${chosenOk ? '✅' : '⚠️'} Maske ${esc(w.mkStart)}–${mint(tmin(w.mkStart) + need.len)} Uhr${chosenOk ? ' – da ist Platz.' : ' – zu der Zeit ist die Maske voll. Die Produktion meldet sich mit einer Alternative.'}</div>` : ''}</div>
-      <div class="wz-f"><label>Sendung / Format</label>${inp('production', 'text', 'z. B. Show-Talk', 'titles')}</div>`;
+      <div class="wz-f"><label>Sendung / Format <span class="muted" style="font-weight:400">– optional</span></label>${inp('production', 'text', 'z. B. Show-Talk', 'titles')}</div>
+      <div class="wz-f"><label>Hinweise / Wünsche (optional)</label><textarea class="input" data-w="notes" rows="3" placeholder="${esc(notesPh())}">${esc(w.notes)}</textarea></div>`;
     }
     if (key === 'who') {
       const names = splitNames(w.talent), cap = mkCfgD(w.date).capacity;
@@ -3723,12 +3756,13 @@ function reqWizard(pre = {}) {
       }
       body = `<div class="wz-f"><label>Wer kommt in die Maske? <span class="muted" style="font-weight:400">– mehrere Personen mit Komma trennen</span></label>${inp('talent', 'text', 'z. B. Anna Muster, Max Beispiel', 'guests')}</div>
         ${names.length ? `<div class="wz-f"><label>Herr / Dame <span class="muted" style="font-weight:400">– optional, hilft der Maske bei der Zeitplanung</span></label><div class="wz-people">${rows}</div></div>` : ''}
-        <div class="muted" style="font-size:0.75rem">Maske in der Regel im 7.OG – den Ort teilt die Produktion zu.</div>${info}`;
+        <div class="muted" style="font-size:0.75rem">Maske in der Regel im 7.OG – den Ort teilt die Produktion zu.</div>${info}
+      <div class="wz-f"><label>Hinweise / Wünsche (optional)</label><textarea class="input" data-w="notes" rows="3" placeholder="${esc(notesPh())}">${esc(w.notes)}</textarea></div>`;
     }
     if (key === 'studio') {
       const list = w.time ? studiosFreeAt(w.date, w.time, endTime()) : db.studios.map(st => ({ st, free: true }));
       const chosen = list.find(x => x.st.id === w.studioId), alternatives = chosen && !chosen.free ? studioAlternativeTimes(w.date, w.studioId, w.time, endTime()) : [];
-      body = `<div class="muted" style="margin-bottom:8px">${fmtShort(w.date)} ${w.time}–${endTime()} · grün = frei</div><div class="ctiles">${list.map(x => `<button type="button" class="ctile ${x.free ? 'ok' : 'busy'} ${w.studioId === x.st.id ? 'sel' : ''}" data-wset="studioId" data-v="${x.st.id}"><div class="ct-top"><b><i class="sw" style="display:inline-block;width:10px;height:10px;border-radius:4px;background:${x.st.color}"></i> ${esc(x.st.name)}</b></div><div class="ct-st">${x.free ? '✅ frei' : `⛔ ${esc(x.hit && isBlock(x.hit.type) ? x.hit.type : 'belegt')}`}</div>${w.studioId === x.st.id ? '<div class="ct-badge">✔ gewählt</div>' : ''}</button>`).join('')}</div>${chosen && !chosen.free ? `<div class="warnbox" style="margin-top:8px"><b>${esc(chosen.st.name)} ist im gewünschten Slot belegt.</b>${alternatives.length ? `<div class="muted" style="margin-top:4px">Alternative Zeiten im selben Studio:</div><div class="alt-times">${alternatives.map(a => `<button type="button" class="chip" data-walt="${a.start}">${a.start}–${a.end}</button>`).join('')}</div>` : '<div class="muted" style="margin-top:4px">Kein passender Alternativslot an diesem Tag gefunden.</div>'}</div>` : ''}${w.type === 'Studio' ? `<div class="wz-f" style="margin-top:16px"><label>Personen / Gäste (optional, mit Komma trennen)</label>${inp('talent', 'text', 'z. B. Anna Muster, Max Beispiel', 'guests')}</div>` : ''}`;
+      body = `<div class="muted" style="margin-bottom:8px">${fmtShort(w.date)} ${w.time}–${endTime()} · grün = frei</div><div class="ctiles">${list.map(x => `<button type="button" class="ctile ${x.free ? 'ok' : 'busy'} ${w.studioId === x.st.id ? 'sel' : ''}" data-wset="studioId" data-v="${x.st.id}"><div class="ct-top"><b><i class="sw" style="display:inline-block;width:10px;height:10px;border-radius:4px;background:${x.st.color}"></i> ${esc(x.st.name)}</b></div><div class="ct-st">${x.free ? '✅ frei' : `⛔ ${esc(x.hit && isBlock(x.hit.type) ? x.hit.type : 'belegt')}`}</div>${w.studioId === x.st.id ? '<div class="ct-badge">✔ gewählt</div>' : ''}</button>`).join('')}</div>${chosen && !chosen.free ? `<div class="warnbox" style="margin-top:8px"><b>${esc(chosen.st.name)} ist im gewünschten Slot belegt.</b>${alternatives.length ? `<div class="muted" style="margin-top:4px">Alternative Zeiten im selben Studio:</div><div class="alt-times">${alternatives.map(a => `<button type="button" class="chip" data-walt="${a.start}">${a.start}–${a.end}</button>`).join('')}</div>` : '<div class="muted" style="margin-top:4px">Kein passender Alternativslot an diesem Tag gefunden.</div>'}</div>` : ''}${w.type === 'Studio' ? `<div class="wz-f" style="margin-top:16px"><label>Personen / Gäste (optional, mit Komma trennen)</label>${inp('talent', 'text', 'z. B. Anna Muster, Max Beispiel', 'guests')}</div><div class="wz-f"><label>Hinweise / Wünsche (optional)</label><textarea class="input" data-w="notes" rows="3" placeholder="${esc(notesPh())}">${esc(w.notes)}</textarea></div>` : ''}`;
     }
     if (key === 'cut') {
       const dups = w.title.trim().length >= 4 ? similarEdits({ title: w.title, deadline: w.deadline }) : [];
@@ -3738,7 +3772,8 @@ function reqWizard(pre = {}) {
         <div class="wz-f"><label>Uhrzeit (optional)</label>${chips('deadlineTime', [['12:00', '12:00'], ['15:00', '15:00'], ['18:00', '18:00']])}</div>
         <div class="wz-f"><label>Priorität</label>${seg('priority', ['Normal', 'Hoch', 'Eilig'])}</div>
         <div class="wz-f"><label>Ausspielung / Länge (optional)</label>${inp('output', 'text', 'z. B. BILD App, 1:30')}</div>
-        <div class="wz-f"><label>📁 Material: Link oder MIMIR Story-ID</label>${inp('materialPath', 'text', 'https://… oder MIMIR Story-ID')}</div>`;
+        <div class="wz-f"><label>📁 Material: Link oder MIMIR Story-ID</label>${inp('materialPath', 'text', 'https://… oder MIMIR Story-ID')}</div>
+        <div class="wz-f"><label>Hinweise / Wünsche (optional)</label><textarea class="input" data-w="notes" rows="3" placeholder="${esc(notesPh())}">${esc(w.notes)}</textarea></div>`;
     }
     if (key === 'cam') {
       const av = w.time ? camAvail(w.date, w.time, endTime()) : null;
@@ -3749,7 +3784,8 @@ function reqWizard(pre = {}) {
         <div class="wz-f"><label>Dauer</label>${chips('dur', [['30 Min.', 30], ['1 Std.', 60], ['1,5 Std.', 90], ['2 Std.', 120]])}${w.time ? `<span class="muted">bis ${endTime()}</span>` : ''}</div>
         ${av ? `<div class="${av.free.length ? 'okbox' : 'warnbox'}">🎥 ${av.onDuty.length ? `<b>${av.free.length} von ${av.onDuty.length}</b> Tageskameras zu der Zeit frei` : 'An diesem Tag ist laut Dienstplan keine Tageskamera eingeplant'}${av.free.length ? '' : ' – du kannst trotzdem anfragen, die Produktion meldet sich.'}</div>` : ''}
         <div class="wz-f"><label>Wo?</label>${inp('place', 'text', 'z. B. Schreibtisch Politik 7. OG, Besprechungsraum …')}</div>
-        <div class="wz-f"><label>Ansprechpartner vor Ort (optional)</label>${inp('contact', 'text', 'Name / Telefon')}</div>`;
+        <div class="wz-f"><label>Ansprechpartner vor Ort (optional)</label>${inp('contact', 'text', 'Name / Telefon')}</div>
+        <div class="wz-f"><label>Hinweise / Wünsche (optional)</label><textarea class="input" data-w="notes" rows="3" placeholder="${esc(notesPh())}">${esc(w.notes)}</textarea></div>`;
     }
     if (key === 'prod') {
       body = `<div class="wz-f"><label>Was wird produziert?</label>${seg('kind', ['Interview', 'Außendreh'])}</div>
@@ -3766,7 +3802,8 @@ function reqWizard(pre = {}) {
       const need = (+w.protagonists || 0) + (+w.interviewers || 0), have = w.binden.split('\n').filter(x => x.trim()).length;
       body = `<div class="wz-f"><label>🏷 Bauchbinden / Taufen aller Beteiligten <span class="muted" style="font-weight:400">– eine Zeile pro Person: Name – Funktion</span></label><textarea class="input" data-w="binden" rows="5" placeholder="Max Mustermann – Bundesminister der Finanzen&#10;Anna Beispiel – BILD-Chefreporterin">${esc(w.binden)}</textarea>
         <div class="${have >= need ? 'okbox' : 'infobox'}" style="margin:8px 0 0">${have} von ${need} Bauchbinden eingetragen (${w.protagonists} Protagonist${+w.protagonists === 1 ? '' : 'en'} + ${w.interviewers} Interviewer)</div></div>
-        <div class="wz-f"><label>📰 Themenbinden <span class="muted" style="font-weight:400">– eine Zeile pro Binde</span></label><textarea class="input" data-w="themen" rows="3" placeholder="Haushalt 2027: Wo jetzt gespart wird">${esc(w.themen)}</textarea></div>`;
+        <div class="wz-f"><label>📰 Themenbinden <span class="muted" style="font-weight:400">– eine Zeile pro Binde</span></label><textarea class="input" data-w="themen" rows="3" placeholder="Haushalt 2027: Wo jetzt gespart wird">${esc(w.themen)}</textarea></div>
+        <div class="wz-f"><label>Weitere Wünsche (optional)</label><textarea class="input" data-w="notes" rows="3" placeholder="${esc(notesPh())}">${esc(w.notes)}</textarea></div>`;
     }
     if (key === 'live') {
       const dups = w.title.trim().length >= 4 ? similarLive({ title: w.title, date: w.date }) : [];
@@ -3776,15 +3813,11 @@ function reqWizard(pre = {}) {
         <div class="wz-f"><label>Datum</label>${chips('date', [['Heute', T], ['Morgen', addDays(T, 1)], ['Übermorgen', addDays(T, 2)]])}${inp('date', 'date')}<span class="muted" style="font-size:0.75rem">Mehrtägig? bis ${inp('until', 'date')}</span></div>
         <div class="wz-f"><label>Beginn</label>${chips('start', ['08:00', '09:00', '10:00', '11:00', '12:00', '14:00', '18:00', '20:00'].map(x => [x, x]))}<div class="pq-row">${inp('start', 'time')}<span class="muted">bis ca.</span>${inp('end', 'time')}</div></div>
         <div class="wz-f"><label>Free oder Plus?</label>${seg('access', ['Free', 'Plus'])}</div>
-        <div class="wz-f"><label>🎞 Aufzeichnung & Replay</label><div class="pq-quick">${REC_OPTS.map(o => `<button type="button" class="chip ${w.recording.includes(o) ? 'on' : ''}" data-wtog="recording" data-v="${esc(o)}">${esc(REC_SHORT[o] || o)}</button>`).join('')}</div></div>`;
+        <div class="wz-f"><label>🎞 Aufzeichnung & Replay</label><div class="pq-quick">${REC_OPTS.map(o => `<button type="button" class="chip ${w.recording.includes(o) ? 'on' : ''}" data-wtog="recording" data-v="${esc(o)}">${esc(REC_SHORT[o] || o)}</button>`).join('')}</div></div>
+        <div class="wz-f"><label>Hinweise / Wünsche (optional)</label><textarea class="input" data-w="notes" rows="3" placeholder="${esc(notesPh())}">${esc(w.notes)}</textarea></div>`;
     }
-    if (key === 'sum') {
-      const rec = w.type === 'Kamera' ? buildCam() : w.type === 'Produktion' ? buildProd() : w.type === 'Live-Stream' ? buildLive() : w.type === 'Schnitt' ? buildEdit() : buildReq();
-      const warn = w.type === 'Kamera' ? camWarn(rec) : w.type === 'Produktion' ? [] : w.type === 'Live-Stream' ? similarLive(rec).filter(x => x.score >= 0.75).map(x => `Sehr ähnlich: „${x.rec.title || x.rec.name}“ ${fmtShort(x.rec.date)} – bitte prüfen, ob das schon angefragt ist.`) : w.type === 'Schnitt' ? (CHECKS.edits(rec) || []) : (CHECKS.requests(rec) || []);
-      body = `<div class="wz-sum">${summary().map(([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div>${warn.length ? `<div class="warnbox">⚠️ ${warn.map(esc).join('<br>⚠️ ')}<div class="muted" style="margin-top:4px">Du kannst trotzdem anfragen – die Produktion prüft das.</div></div>` : ''}<div class="wz-f"><label>${w.type === 'Produktion' ? 'Weitere Wünsche' : 'Hinweise / Wünsche'} (optional)</label><textarea class="input" data-w="notes" rows="3" placeholder="${esc(notesPh())}">${esc(w.notes)}</textarea></div>`;
-    }
-    $('#wz', m).innerHTML = `<div class="wz-steps">${steps.map((k, i) => `<span class="${i === step ? 'on' : i < step ? 'done' : ''}">${i < step ? '✓' : i + 1} ${WIZ_LABEL[k]}</span>`).join('')}</div><div class="wz-body">${body}</div><div id="wzErr"></div>
-      <div class="modal-f" style="margin:16px -16px -16px">${step > 0 ? '<button class="btn left" data-wnav="back">‹ Zurück</button>' : '<span class="left"></span>'}<button class="btn" data-m="close">Abbrechen</button>${key === 'sum' ? '<button class="btn" data-wnav="mail">✉️ Senden & per E-Mail ergänzen</button><button class="btn primary" data-wnav="send">📨 Anfrage senden</button>' : key === 'type' ? '' : '<button class="btn primary" data-wnav="next">Weiter ›</button>'}</div>`;
+    $('#wz', m).innerHTML = `<div class="wz-steps">${steps.map((k, i) => `<span class="${i === step ? 'on' : i < step ? 'done' : ''}">${i < step ? '✓' : i + 1} ${WIZ_LABEL[k]}</span>`).join('')}</div><div class="wz-body">${body}</div><div id="wzErr"></div>`;
+    $('.modal-f', m).innerHTML = `<button class="btn left" data-m="close">Abbrechen</button>${step > 0 ? '<button class="btn" data-wnav="back">‹ Zurück</button>' : ''}${step === steps.length - 1 ? '<button class="btn" data-wnav="mail">✉️ Senden & per E-Mail ergänzen</button><button class="btn primary" data-wnav="send">📨 Anfrage senden</button>' : key === 'type' ? '' : '<button class="btn primary" data-wnav="next">Weiter ›</button>'}`;
     const f = $('[data-w]', $('.wz-body', m)); if (f && !f.value && f.type !== 'date') setTimeout(() => f.focus(), 30);
   };
   const send = () => {
@@ -3818,8 +3851,24 @@ function reqWizard(pre = {}) {
     const nv = e.target.closest('[data-wnav]'); if (!nv) return;
     const key = wizSteps(w.type)[step];
     if (nv.dataset.wnav === 'back') { step = Math.max(0, step - 1); draw(); return; }
-    if (nv.dataset.wnav === 'next') { const err = valid(key === 'when' && w.type === 'Maske' ? 'mkwhen' : key); if (err) { $('#wzErr', m).innerHTML = `<div class="warnbox">${esc(err)}</div>`; return; } step++; draw(); return; }
-    if (nv.dataset.wnav === 'send' || nv.dataset.wnav === 'mail') { const [coll, id] = send(); if (nv.dataset.wnav === 'mail') setTimeout(() => reqMailDialog(coll, id), 0); }
+    if (nv.dataset.wnav === 'next') { const err = valid(key === 'when' && w.type === 'Maske' ? 'mkwhen' : key); if (err) { $('#wzErr', m).innerHTML = `<div class="warnbox">${esc(err)}</div>`; setTimeout(() => $('#wzErr', m).scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50); return; } step++; draw(); return; }
+    if (nv.dataset.wnav === 'send' || nv.dataset.wnav === 'mail') {
+      // Validiere letzten Schritt vor dem Senden
+      const steps = wizSteps(w.type);
+      const lastStepKey = steps[steps.length - 1];
+      // Bestimme den korrekten Validierungskey
+      let validKey = lastStepKey;
+      if (lastStepKey === 'when' && w.type === 'Maske') validKey = 'mkwhen';
+      else if (lastStepKey === 'when' && w.type !== 'Maske') validKey = 'when';
+      const err = valid(validKey);
+      if (err) {
+        $('#wzErr', m).innerHTML = `<div class="warnbox">${esc(err)}</div>`;
+        setTimeout(() => $('#wzErr', m).scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
+        return;
+      }
+      const [coll, id] = send();
+      if (nv.dataset.wnav === 'mail') setTimeout(() => reqMailDialog(coll, id), 0);
+    }
   });
   draw();
 }

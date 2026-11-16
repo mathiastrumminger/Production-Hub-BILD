@@ -30,17 +30,34 @@ test('vendored JSZip remains available offline', async () => {
   assert.match(source, /JSZip/);
 });
 
-test('split sources reproduce the original standalone file byte-for-byte', async () => {
-  const [index, css, jszip, app, baseline] = await Promise.all([
+test('split sources reproduce the current standalone file byte-for-byte', async () => {
+  const [index, css, jszip, app, pkg] = await Promise.all([
     load('index.html'),
     load('src/styles.css'),
     load('vendor/jszip.min.js'),
     load('src/app.js'),
-    load('standalone/ProductionHub_v0.30.html')
+    load('package.json').then(JSON.parse)
   ]);
   const rebuilt = index
     .replace('<link rel="stylesheet" href="./src/styles.css">', () => `<style>\n${css}</style>`)
     .replace('<script src="./vendor/jszip.min.js"></script>', () => `<script>${jszip}</script>`)
     .replace('<script src="./src/app.js"></script>', () => `<script>\n${app}</script>`);
+  const version = pkg.version.replace(/\.0$/, '');
+  const baseline = await load(`standalone/ProductionHub_v${version}.html`);
   assert.equal(rebuilt, baseline);
+});
+
+test('HTML attributes in app.js use straight quotes so click handlers match', async () => {
+  const app = await load('src/app.js');
+  const bad = app.split('\n').map((l, i) => [i + 1, l]).filter(([, l]) => /[a-z-]=[”“]/.test(l));
+  assert.deepEqual(bad.map(([n]) => n), [], 'typografische Anführungszeichen in HTML-Attributen');
+});
+
+test('request wizard renders navigation buttons with matching data-wnav values', async () => {
+  const app = await load('src/app.js');
+  for (const nav of ['back', 'next', 'send', 'mail']) {
+    assert.match(app, new RegExp(`data-wnav="${nav}"`));
+    assert.match(app, new RegExp(`nv\\.dataset\\.wnav === '${nav}'`));
+  }
+  assert.match(app, /data-m="close">Abbrechen/);
 });
